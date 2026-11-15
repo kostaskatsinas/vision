@@ -1,3 +1,6 @@
+> **This is Vision**, a personal fork of [Mark-LVII](https://github.com/FatihMakes/Mark-LVII) set up for Linux on Wayland.
+> The fork's plan, requirements and setup notes are in [docs/VISION.md](docs/VISION.md). Everything below is the upstream documentation.
+
 # ⚙️ MARK LVII (57)
 ### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
 
