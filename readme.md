@@ -2,11 +2,11 @@
 > The fork's plan, requirements and setup notes are in [docs/VISION.md](docs/VISION.md). Everything below is the upstream documentation.
 
 # ⚙️ MARK LVII (57)
-### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
+### The Ultimate Personal AI Assistant for Linux — By FatihMakes
 
 > 📺 **[Watch the full setup video on YouTube](https://www.youtube.com/@FatihMakes)**
 
-A real-time voice AI that can hear, see, speak, and control your computer — on any OS. Supports Windows, macOS, and Linux. Built on the Gemini Live API for native audio streaming, delivering zero subscriptions and total digital autonomy.
+A real-time voice AI that can hear, see, speak, and control your Linux computer. Built on the Gemini Live API for native audio streaming, delivering zero subscriptions and total digital autonomy.
 
 ---
 
@@ -87,7 +87,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 🌍 Language-Free Mouth | Articulation is derived by Unicode reduction, so Latin, Cyrillic and Greek scripts all work from one rule set — and scripts that hide pronunciation fall back cleanly |
 | 🙂 Facial Acting | Brows track the phrase, gaze saccades between fixations, natural blinking, a small nod on stressed syllables |
 | 😐 Face as Status | Looks away while thinking, meets your eyes while listening, lids fall while asleep, glances down at new content |
-| 🎚️ Push-to-Talk | Hold **Ctrl+Space** and the mic opens — closed the rest of the time. Truly global on Windows, window-scoped elsewhere |
+| 🎚️ Push-to-Talk | Hold **Ctrl+Space** and the mic opens — closed the rest of the time. Works while the assistant's window has focus |
 | 🔇 Self-Echo Guard | Never answers its own last sentence: the tail of its own voice is recognised and dropped without muting you |
 | 🪪 Runtime Self-Knowledge | Name, OS, abilities **and limits** are generated from the live system each session — rename it or add a plugin and it knows |
 | 🎙️ Wake Word | Local **"Hey Jarvis"** detection — sleeps until called, auto-sleeps after 2 min of silence, and never streams audio while asleep |
@@ -128,20 +128,20 @@ It's not just an assistant — it's an extension of your digital life.
 | 🌤️ Weather Report | Live weather data for your city, personalized from memory |
 | 🗺️ Dynamic Content Panel | Scrollable display layer beneath the HUD that renders web results, news, and search data |
 | 🔍 Multi-Mode Web Search | `news` / `research` / `price` / `compare` / `search` — Gemini Grounded first, DDG fallback |
-| ⏰ Smart Reminders | OS-native scheduled notifications (Windows Task Scheduler / macOS LaunchAgent / Linux systemd) — and said aloud at that moment while the assistant is running |
+| ⏰ Smart Reminders | Scheduled notifications through systemd — and said aloud at that moment while the assistant is running |
 | 📂 File Processor | Read, summarize, and answer questions about local files |
 | 🌐 Browser Control | Open URLs, navigate tabs, and interact with the browser by voice |
 | 📨 Send Message | Compose and send messages through WhatsApp, Telegram, and more |
 | 🖱️ Desktop Control | Taskbar, window management, and desktop-level operations |
 | 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
 | 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
-| ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
+| ⚡ Auto-Start on Boot | Registers a `.desktop` autostart entry |
 | 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
 | 🤝 It Says What It Checked | Every tool answers `done` / `unverified` / `failed` — a request that could not be confirmed is never spoken as a success |
 | 🚪 Close an App by Name | Matched against what is running, asked politely so unsaved work survives, and the assistant's own processes are never a target |
 | 🪟 Raise, Don't Duplicate | Opening something already running brings its window to the front instead of starting a second copy |
 | 🛡️ Untrusted Content Boundary | Web pages and documents reach the model wrapped as data — an instruction inside one is reported, not obeyed |
-| 🐧 Platform Honesty | On Wayland, or a macOS without permissions, it says what this session will not let it do instead of narrating a click that never happened |
+| 🐧 Platform Honesty | On Wayland it says what this session will not let it do instead of narrating a click that never happened |
 | 🎚️ Per-Device Volume | The output slider belongs to the speaker you picked, not to whatever the system calls default |
 | 🎤 Prove It Hears You | A TEST button with a live meter — the one check an automated probe on silence can never make |
 | 🪪 Assistant Customization | Change the assistant name, your name, voice, and colour from the UI — takes effect immediately |
@@ -272,11 +272,11 @@ reach them.
 #### 🎚️ Controls that take the number you said
 
 * **"Volume up by 50" moved it by 10, and so did "turn it up to 100" when the model reached for volume_up.** Up and down pressed the volume key five times whatever was asked. They now read the level and set it to the level plus or minus the amount you named — 10 when you name none — and the tool tells the model plainly that a level you name is a *set*, an amount is a *step*, and a level is never approximated with repeated steps.
-* **"Unmute" muted a machine that was not muted.** It pressed the mute key, which is a toggle; on macOS both words ran the same "set muted" command. Mute and unmute now set the state asked for and read it back; toggle is its own action.
-* **Setting the volume on a muted machine left it silent**, and when the Windows volume interface failed, the fallback pressed mute twice — which changes nothing. A level above zero now unmutes, like the volume keys do; the fallback walks the slider to the bottom and back up to the level.
+* **"Unmute" muted a machine that was not muted.** It pressed the mute key, which is a toggle. Mute and unmute now set the state asked for and read it back; toggle is its own action.
+* **Setting the volume on a muted machine left it silent**. A level above zero now unmutes, like the volume keys do.
 * **A missing level became 50.** "Set the volume" with the number lost on the way changed the volume to half. It asks now. `"40%"` is read as 40 instead of failing.
-* **Brightness had no level at all**, only ±10: `brightness_set` exists now, steps take an amount, macOS reaches a level through its sixteenth-steps, and Linux without `brightnessctl` falls back to xrandr — whose old shell one-liner could never have run (its inner quotes were stripped by the shell, so Python saw `[xrandr,--verbose]`).
-* **Scrolling moved a different distance on every OS.** pyautogui counts 1/120 of a wheel notch on Windows and whole notches elsewhere: the default "500" scrolled four notches on Windows and five hundred on Linux, and `computer_control`'s "scroll 3" moved a Windows page by nothing. Both tools count notches now.
+* **Brightness had no level at all**, only ±10: `brightness_set` exists now, steps take an amount, and Linux without `brightnessctl` falls back to xrandr — whose old shell one-liner could never have run (its inner quotes were stripped by the shell, so Python saw `[xrandr,--verbose]`).
+* **Scrolling went far too far.** pyautogui counts whole wheel notches on Linux, so the default "500" scrolled five hundred of them. Both tools count notches now.
 * **Repeats were ignored.** "Zoom in three times", "go back two pages", "press right four times" happened once. Key actions take `times`.
 * **There was no way to skip a song or seek.** Media keys — play/pause, next, previous, stop — reach music and video apps without focusing them (playerctl on Linux). Seeking in another app sends arrow keys and says it is an estimate, because no player reports its position; on Linux, playerctl seeks exactly and is checked.
 * **A video on the HUD could only be muted or closed.** It now goes forward and back by seconds, jumps to `1:20`, pauses and resumes — exactly, and the answer is the position the player reports afterwards.
@@ -313,7 +313,7 @@ Those calls can now fall back to another model on their own — the conversation
 
 This project is used in many languages, and for a while local mode was not. The two voices it shipped with each gave up something it cannot afford:
 
-The **system voice** speaks only the languages the machine has voices installed for. Measured on an ordinary Windows 10 install: two, both English. A Turkish sentence came out as English phonetics; a Russian one came out as *silence, with a success code*. **ElevenLabs** speaks every language beautifully and needs an account, a key, and a working connection for every sentence.
+The **system voice** speaks only the languages the machine has voices installed for. A sentence in another language comes out with the wrong phonetics, or as *silence, with a success code*. **ElevenLabs** speaks every language beautifully and needs an account, a key, and a working connection for every sentence.
 
 **Piper** needs a download the first time and nothing at all afterwards. Measured here, Turkish, on the CPU:
 
@@ -372,7 +372,7 @@ Loading the speech model is 1.4s. The **first transcription after that is 8.5s**
 The warm-up now runs a throwaway recognition on a tenth of a second of silence before anyone speaks. **8.92s → 1.16s**, and the warm-up itself costs 1.08s of a moment nobody is waiting.
 
 #### 🔇 A system voice given a script it does not have returns success and silence
-Measured on an ordinary Windows 10 install: two voices, both English. A Turkish sentence came out as English phonetics — poor, but audible. A **Russian sentence produced zero bytes, with a success code.** Silence that reports success is the worst failure there is: the assistant looks like it ignored you, and the suspicion falls on your speakers. It is now an error that names the cause and says what to do about it.
+A sentence in a language with no installed voice comes out with the wrong phonetics at best. At worst it produces **zero bytes, with a success code.** Silence that reports success is the worst failure there is: the assistant looks like it ignored you, and the suspicion falls on your speakers. It is now an error that names the cause and says what to do about it.
 
 #### 🈚 A whole Japanese paragraph was synthesised as one block
 The sentence splitter required whitespace after the full stop. Japanese and Chinese do not put one after `。`, so nothing ever split. Two rules now: after `.!?` a space is required, or every version number becomes two sentences; after `。！？؟۔।` it is not.
@@ -393,10 +393,8 @@ This install declares **45 tools and 56,148 characters** on every connection. Ge
 
 The obvious fix is a limit on how many tools it is given. Measured, that is only half a fix: 20 tools down to 8 — sixty percent fewer — took the payload from 18,039 characters to 9,050, because the tools worth keeping are the fat ones (`file_processor` alone is 3,024 characters). There are two budgets now, one for count and one for size, and whichever bites first wins. **Gemini gets no budget and therefore every tool, in the original order.**
 
-#### 🔌 `localhost` is not `127.0.0.1` on Windows
-Windows resolves `localhost` to `::1` first; Ollama and llama.cpp bind to the IPv4 loopback only. macOS and most Linux distributions order it the other way — which is exactly why this ships broken, because it works on the author's machine. Every local address is normalised to `127.0.0.1`.
-
-And a proxy set for the whole machine is **not** used to reach that same machine: `HTTP_PROXY` is commonly set globally on managed Windows and macOS, `httpx` honours it by default, and the result is a timeout that reads as "Ollama is not running" — sending people to reinstall a server that was working the whole time.
+#### 🔌 A system-wide proxy is not used to reach this machine
+A proxy set for the whole machine is **not** used to reach that same machine: when `HTTP_PROXY` is set globally, `httpx` honours it by default, and the result is a timeout that reads as "Ollama is not running" — sending people to reinstall a server that was working the whole time.
 
 ### The shape
 
@@ -423,7 +421,7 @@ It keeps tools, memory, the avatar, lip-sync, undo and the confirmation gate. An
 
 ### 🤝 It stopped saying it had done things it had not done
 
-`open_app` answered **"Opened Spotify."** whenever its launcher returned — and on Windows that launcher returned the instant a *shell* started, not when an application did. A misspelling, an app that was never installed, an installer that moved: every one produced a confident success, said out loud, while nothing appeared on screen. That is worse than an error, because an error is something you can act on and a false success sends you looking for the window.
+`open_app` answered **"Opened Spotify."** whenever its launcher returned, which can happen before any application has started. A misspelling, an app that was never installed, an installer that moved: every one produced a confident success, said out loud, while nothing appeared on screen. That is worse than an error, because an error is something you can act on and a false success sends you looking for the window.
 
 Every tool that drives the computer now answers in one of five words, and the model is told what each may and may not be spoken as:
 
@@ -441,16 +439,15 @@ The evidence is real work, not a longer sentence. Opening an application watches
 
 ### 🚪 "Close the app" closed JARVIS
 
-The old close was two lines with no target:
+The old close was one line with no target:
 
 ```python
-if _OS == "Darwin": pyautogui.hotkey("command", "q")
-else:               pyautogui.hotkey("alt", "f4")
+pyautogui.hotkey("alt", "f4")
 ```
 
 It sent the quit chord to **whatever window had focus** — and while somebody is talking to the assistant, the window with focus is very often the assistant. It also returned nothing at all, so the model announced a success it had no information about.
 
-It could not be fixed by aiming better: "the focused window" is the wrong idea. The user names an application, so the application is what has to be found. Closing now matches against what is actually **running**, refuses the assistant's own processes, asks the application politely — WM_CLOSE on Windows, SIGTERM elsewhere, so unsaved work gets its dialog — and never escalates to a kill.
+It could not be fixed by aiming better: "the focused window" is the wrong idea. The user names an application, so the application is what has to be found. Closing now matches against what is actually **running**, refuses the assistant's own processes, asks the application politely with SIGTERM, so unsaved work gets its dialog, and never escalates to a kill.
 
 **The guard is three layers deep on purpose.** The first two ask the ranking and the process-tree map, and both are built from readings that can fail. The third asks a question with no moving parts: is this running the same executable I am? It needs no cache, no scan and no tree walk. Overlapping guards on a function that ends processes is not redundancy to tidy away later — there is no undo for closing the wrong thing.
 
@@ -460,9 +457,9 @@ It could not be fixed by aiming better: "the focused window" is the wrong idea. 
 
 "Open WhatsApp" when WhatsApp is running behind three other windows is still a request to *see* WhatsApp. Reporting "it was already open" and stopping is technically true and completely useless — which is how it read when it shipped.
 
-It raises the window now, the way clicking a taskbar icon does. Two details that only show up in use: Windows refuses to let a background process take the foreground, so the standard input-queue attach is used when the plain call is refused; and a Store app's window belongs to another process entirely, so when no window can be raised it falls through to launching, which is what brings back an app that is only in the tray.
+It raises the window now, the way clicking a taskbar icon does. When no window can be raised it falls through to launching, which is what brings back an app that is only in the tray.
 
-**Short names no longer match the wrong program.** "wp" matched the running `wps.exe`, and the assistant reported WPS Office as WhatsApp. Two letters are a prefix of far too much, so anything under four characters must now match exactly.
+**Short names no longer match the wrong program.** "wp" matched the running `wps`, and the assistant reported WPS Office as WhatsApp. Two letters are a prefix of far too much, so anything under four characters must now match exactly.
 
 ### 🛡️ Content from outside is marked as content from outside
 
@@ -480,9 +477,9 @@ They are gone, and what replaced them is better than a translation: the rules no
 
 ### 🐧 What Wayland does not allow, said out loud
 
-"It doesn't work properly on Linux" was reported for a long time without anybody being able to name the failing part. It is the same answer on macOS, and it is not a bug in any one file.
+"It doesn't work properly on Linux" was reported for a long time without anybody being able to name the failing part. It is not a bug in any one file.
 
-Wayland — the default session on Ubuntu 22.04 and later, on Fedora, and on current GNOME and KDE — does not let one program type, click, capture the screen or raise another program's window. That was the security hole it was designed to close. macOS refuses the same things until Accessibility and Screen Recording are granted. And on both, **the calls report success and have no effect**, which is the worst possible failure: the assistant says it clicked, and nothing moved.
+Wayland — the default session on Ubuntu 22.04 and later, on Fedora, and on current GNOME and KDE — does not let one program type, click, capture the screen or raise another program's window. That was the security hole it was designed to close. And **the calls report success and have no effect**, which is the worst possible failure: the assistant says it clicked, and nothing moved.
 
 None of that is fixable from inside the app. What was fixable is the silence. The session is detected at startup, the user is told once in the activity log, and — the half that matters — the **model is told**, so JARVIS says "this session does not permit me to drive the screen" instead of narrating a click that never happened. Voice, memory, files, the web and opening applications are unaffected, and are not mentioned.
 
@@ -493,8 +490,6 @@ Every automated probe in `core/audio_devices.py` runs on silence, which is what 
 ⚙ → **🎧 AUDIO DEVICES** now has a **TEST** button beside each device: the microphone shows a live meter while you speak and reports the peak it heard, the speakers play a tone. It replaces a loose `ses_testi.py` in the project root that nobody would ever have found — the moment somebody needs this is the moment they have already opened this panel wondering why JARVIS cannot hear them.
 
 There is also an **output volume slider**, and it belongs to the device chosen two lines above it rather than to the system default. Somebody puts the assistant on their speakers and keeps everything else in their headphones; a slider labelled with one device that moves the other is worse than no slider.
-
-> Two real bugs surfaced while building it. Volume could not be read at all on current pycaw — `GetSpeakers()` returns a wrapper without the `.Activate` the code called, so every read raised and was swallowed, and undo for volume had quietly stopped registering. And Windows keeps NotPresent devices under the **same friendly name** as live ones: the panel read 100% for a speaker that was actually at 10%, which is why it sounded so quiet.
 
 ### 📱 The phone dashboard
 
@@ -528,26 +523,6 @@ door stayed:
   out. Over plain HTTP there is no `crypto.subtle` and so no encryption at all —
   the page says `NO ENC` on its own badge rather than pretending otherwise.
 
-**And Windows was blocking it, per executable, invisibly.** This produced the
-strangest report of the release: the dashboard worked when JARVIS was started
-from an editor and did not work when started from its own desktop shortcut —
-same machine, same network, same code.
-
-The shortcut targets `pythonw.exe`, so no console window appears. An editor runs
-`python.exe`. Windows Firewall rules are **per executable**, so allowing one says
-nothing about the other. Worse, dismissing the "Allow access?" prompt — easy to
-do when it appears unannounced — makes Windows write a **block** rule, and a
-block overrides every allow rule there is, including the port rule this app
-creates for itself. Measured on the machine where it went wrong: `pythonw.exe`
-was blocked on the Private profile, `python.exe` only on Public, and the network
-was Private. That is the entire difference between the two launch methods.
-
-Both interpreters are allowed now, any block rule against either is found and
-removed under one prompt that says what it is for, and the result is **checked
-afterwards** rather than assumed. When the prompt is declined, the QR panel says
-so on screen — the person scanning the code is looking at the HUD, not at a
-terminal.
-
 ### ⚡ Nothing heavy is loaded for a feature you did not use
 
 `pyautogui` is 394 ms and OpenCV is 224 ms, and both were paid at **every** launch by the folder scan that discovers actions and plugins — whether or not anyone asked for a keystroke or pointed a webcam at anything.
@@ -578,13 +553,13 @@ Nothing is removed to get there. And `tier` — the per-file override that decid
 ### 🩹 Fixes
 
 
-* **`open_app` was a command injection.** `shutil.which(name.split(".")[0])` accepted `"notepad.exe & whoami"` because `which("notepad")` succeeds, and the whole string then went to a shell unquoted. Verified before it was changed; there is no shell on any launch path now.
+* **`open_app` was a command injection.** `shutil.which(name.split(".")[0])` accepted `"gedit.x & whoami"` because `which("gedit")` succeeds, and the whole string then went to a shell unquoted. Verified before it was changed; there is no shell on any launch path now.
 * **`desktop_control` asked a model to write Python and ran it.** The rules — "NO subprocess", "NO file deletion", "NO imports" — were sentences in a *prompt*, with nothing enforcing them, while the namespace handed the generated code `getattr`, the real `pathlib.Path`, `pyautogui` and `ctypes`. From inside it, `subprocess.Popen` was one line away. It was also the only tool in the project that broke the project's own architecture: every other one declares typed parameters and lets the model fill them in. Removed — and nothing was lost, because typing and clicking are `computer_control`, multi-step screen work is `screen_agent`, and files are `file_controller`.
 * **The screen agent crashed on every machine without Pillow.** `import mss.tools` inside a function made `mss` local to that whole function, so a line five above it read a local that had not been assigned yet: *"cannot access local variable 'mss'"*. It only fired on the branch Pillow's absence selected, which is why it looked intermittent.
 * **The voice changed accent at random.** Whisper reports a language for every utterance and is confident about all of them, including "ok", "hmm" and "thanks" — and the voice followed. `language_probability` was on the same object and was being thrown away. A switch now needs both confidence and enough words; a one-word reply keeps the language it was already speaking.
 * **Chrome opened twice, on a profile with none of your sign-ins.** Asking to open a web page called `open_app` for the browser and `browser_control` after it. Both descriptions now say the second one opens the browser itself.
 * **A locked Chrome profile cost 25 seconds of silence.** A profile can only be open once, so with the browser already running the launch sat on its timeout before falling back to a profile the user is signed into nothing on — and said nothing about it. Whether the browser is running is a question the process table answers in 150 ms, and the answer is now reported.
-* **A process whose executable path could not be read was not recognised as the assistant's own.** Self-protection compared full paths, and a path comes back empty for a process that is exiting or that the OS will not inspect — so a `python.exe` belonging to this very application could become a candidate for closing. The name is compared when the path cannot be, and a process that vanishes before it can be touched is no longer reported as one this tool closed.
+* **A process whose executable path could not be read was not recognised as the assistant's own.** Self-protection compared full paths, and a path comes back empty for a process that is exiting or that the OS will not inspect — so a Python process belonging to this very application could become a candidate for closing. The name is compared when the path cannot be, and a process that vanishes before it can be touched is no longer reported as one this tool closed.
 * Search results and file contents were shown to the user with their untrusted markers still attached. Those markers are for the model.
 * The activity log filled with tool status lines. It carries the conversation and problems; the running commentary belongs in the terminal.
 * `computer_settings` said `Done: <action>` whether or not anything had changed. Volume, brightness and dark mode are read back now; a keystroke sent to a window the user is looking at reports what it did rather than what it achieved.
@@ -745,23 +720,9 @@ The token is now issued by the interface. Shutdown, restart and WiFi put a banne
 
 ### 🎧 It finally asks which microphone
 
-Both audio streams opened with no device argument at all, so they always took whatever the OS called "default" — and on Windows that *moves on its own* the moment you plug a headset in. "JARVIS can't hear me" almost always meant "JARVIS is listening to the webcam".
+Both audio streams opened with no device argument at all, so they always took whatever the OS called "default", which can move on its own the moment you plug a headset in. "JARVIS can't hear me" almost always meant "JARVIS is listening to the webcam".
 
-⚙ → **🎧 AUDIO DEVICES** lets you pick the microphone and the speakers by name. Two things matter more than the dropdown:
-
-**The list is short.** `query_devices()` returns one entry per *device × host API*, not per device — measured on an ordinary Windows machine, **41 entries for what the sound settings show as 4 microphones and 4 speakers.** The same microphone appears four times, under MME, DirectSound, WASAPI and WDM-KS, with nothing to say which is which. That is not a choice, it's a quiz. The picker takes one host API per direction, drops the "Sound Mapper" and "Primary Sound Driver" pseudo-devices that just mean "default", and deduplicates. **41 → 8.**
-
-**Every entry has been measured, not assumed.** The obvious approach is to pick the host API with the nicest names — WASAPI on Windows, which in shared mode **doesn't resample**, so with 16 kHz in and 24 kHz out against 48 kHz hardware every open failed. Adding a rate check and moving to DirectSound passes that test on both sides, and PortAudio's DirectSound **output is a silent sink**: the stream opens, every write returns success in ~0 ms, and not one sample reaches the speakers.
-
-| | write(2.0 s) took | |
-|---|---|---|
-| MME | **2.02 s** | consumed in real time |
-| DirectSound | **0.00 s** | swallowed instantly |
-
-No capability flag reports that. So the app measures it — once per host API per direction, on a background thread at startup, using silence. Two consequences worth stating plainly:
-
-* **Each direction picks its own host API.** On Windows this lands on DirectSound for the microphone and MME for the speakers — a split no amount of reasoning would have produced.
-* **The probe runs in the mode the app actually ships.** DirectSound input passes a callback stream and fails a blocking read; probing the wrong mode rejected a microphone that works perfectly.
+⚙ → **🎧 AUDIO DEVICES** lets you pick the microphone and the speakers by name. Each device appears once, without the pseudo-devices that just mean "default", and every entry is checked at startup to make sure it actually opens.
 
 Your choice is stored **by name, not by index** — indices shift whenever something is plugged in. If the saved device is gone, it falls back to the system default and says so in the log rather than failing to start.
 
@@ -775,7 +736,7 @@ It is held in memory only, deliberately: writing it to disk would make a fresh l
 
 ### 🩹 Fixes that came with it
 
-* **The assistant could die on a log line.** Status lines carry emoji and arrows (`📤 file_controller → Moved: a.txt → Documents/`). On a non-UTF-8 console — cp1254 on a Turkish Windows, cp1251 on a Russian one, cp932 on a Japanese one — printing one raises `UnicodeEncodeError`, and because that print sits *after* the tool's own `try/except`, it escaped into the receive loop and took the session down.
+* **The assistant could die on a log line.** Status lines carry emoji and arrows (`📤 file_controller → Moved: a.txt → Documents/`). On a non-UTF-8 console, printing one raises `UnicodeEncodeError`, and because that print sits *after* the tool's own `try/except`, it escaped into the receive loop and took the session down.
 * **Every computer command paid for two model round trips.** `computer_settings` made an *entire second Gemini call, inside the tool*, purely to translate the request into one of its own action names — because the declaration only said "The action to perform", so the model rarely filled it in. When that second call failed, the fallback was `description.lower().replace(" ", "_")`, which turns the Turkish for "turn it down" into `sesi_kis` and straight into "Unknown action". The declaration now names all 56 actions and the rest is spelling tolerance handled locally by `difflib` in microseconds. When nothing matches it suggests real action names instead of dead-ending.
 * An unresolvable saved audio device, or one the driver refuses to open, falls back to the system default and says so — on both the microphone and the speakers.
 * A rejected session-resumption handle is dropped after one attempt, so an expired handle can never be replayed on every retry and prevent the reconnect it exists to protect.
@@ -795,7 +756,7 @@ It is held in memory only, deliberately: writing it to disk would make a fresh l
 | **LIII** | Wake word · Gemini 3.1 Flash Live · instant acknowledgment · self-describing action/plugin architecture |
 | **LIV** | Holographic avatar · viseme lip-sync · facial acting · face-as-status · push-to-talk · self-echo guard · runtime self-knowledge & limits |
 | **LV** | Video on the HUD · model ladder with measured fallback · split settings drawers · trimmed bundled skill list |
-| **LVI** | Choose your engine · local & third-party models · Whisper + Piper in ~50 languages · language-following voice · ElevenLabs · tool budget for small models · verified outcomes instead of claimed ones · close an app by name · untrusted-content boundary · platform honesty on Wayland and macOS · hardened phone dashboard |
+| **LVI** | Choose your engine · local & third-party models · Whisper + Piper in ~50 languages · language-following voice · ElevenLabs · tool budget for small models · verified outcomes instead of claimed ones · close an app by name · untrusted-content boundary · platform honesty on Wayland · hardened phone dashboard |
 | *shared* | The last five above also shipped to LIII, LIV and LV at the same time — moving up a Mark never loses them |
 | **LVII** | Background tasks · agents as files · deep research with quotes checked in code · one routine engine for briefing, check-ins, news watch and reminders · quiet hours · command-center HUD · 3-D reactor core · re-measured model ladder |
 | **LVIII+** | MCP tools · an approval policy for actions · event-driven proactivity · a knowledge folder · conversation history · interrupt by voice |
@@ -807,11 +768,11 @@ It is held in memory only, deliberately: writing it to disk would make a fresh l
 ```bash
 git clone https://github.com/FatihMakes/Mark-LVII.git
 cd Mark-LVII
-python setup.py        # installs deps for YOUR OS + the browser automation engine
+python setup.py        # installs the dependencies + the browser automation engine
 python main.py
 ```
 
-`setup.py` only ever installs what your operating system needs — the Windows-only libraries are skipped automatically on macOS and Linux, and vice-versa. It also checks your Python version up front, so a wrong interpreter fails with a sentence instead of a wall of pip output. Prefer to do it by hand? `pip install -r requirements.txt` works too.
+`setup.py` installs only what Linux needs. It also checks your Python version up front, so a wrong interpreter fails with a sentence instead of a wall of pip output. Prefer to do it by hand? `pip install -r requirements.txt` works too.
 
 > ⚠️ **Installation Note:** If you hit a `ModuleNotFoundError` for an OS-specific package, install it with `pip install <module_name>`. The optional **wake word** engine is *not* installed here — grab it in one click from **⚙ → WAKE WORD** inside the app.
 
@@ -821,9 +782,8 @@ python main.py
 
 | Requirement | Details |
 | --- | --- |
-| **OS** | Windows 10/11, macOS, or Linux |
+| **OS** | Linux |
 | **Linux display server** | Everything works on **X11**. On **Wayland** — the default on Ubuntu 22.04+, Fedora and current GNOME/KDE — the system does not permit any program to type, click, capture the screen or raise another window, so those features are unavailable and JARVIS says so at startup instead of pretending. Voice, memory, files, the web and opening applications are unaffected. Log out and pick an Xorg session to get the rest |
-| **macOS permissions** | Accessibility (to type and click) and Screen Recording (to see the screen), both under System Settings → Privacy & Security. Until granted, those actions silently do nothing — the OS reports success either way |
 | **Python** | 3.11, 3.12 or 3.13 |
 | **Microphone** | Required for voice interaction (and for the "Hey Jarvis" wake word) |
 | **Speakers** | Required for voice replies |
@@ -870,7 +830,7 @@ Mark LVII/
 │   ├── llm_openai.py         # Every /v1/chat/completions endpoint: local servers and hosted APIs
 │   ├── stt_whisper.py        # faster-whisper on the CPU, or a transcription API
 │   ├── tts_piper.py          # Neural voice here, ~50 languages, follows the one you speak
-│   ├── tts_system.py         # Windows SAPI / macOS say / Linux espeak-ng — nothing to download
+│   ├── tts_system.py         # espeak-ng — nothing to download
 │   ├── tts_elevenlabs.py     # One voice, every language, streamed
 │   ├── engine_pipeline.py    # STT -> LLM -> TTS, wearing the Live session's interface
 │   ├── _tests.py             # `python -m providers._tests` — no network, no key needed
@@ -957,7 +917,7 @@ Mark LVII/
 │   ├── appidentity.py        # Which applications are running, which one the user named,
 │   │                         #   and which processes are the assistant's own (never a target)
 │   ├── lazyimport.py         # Heavy third-party imports paid only if they are used
-│   ├── platform_support.py   # What THIS machine permits — Wayland, macOS permissions —
+│   ├── platform_support.py   # What THIS machine permits — X11 or Wayland —
 │   │                         #   reported to the user and to the model, never guessed at
 │   ├── gemini.py             # One place for every one-shot Gemini call — model ladder, timeouts,
 │   │                         #   cooldowns, and the configured provider as one more rung
@@ -967,7 +927,7 @@ Mark LVII/
 │   ├── face_model.obj        # The face itself (MediaPipe canonical model, Apache-2.0, 25 KB)
 │   ├── viseme.py             # Transcript → mouth shapes, fused with the audio's timing
 │   ├── echo.py               # Tells your voice from the assistant's own echo; self-calibrating
-│   ├── hotkey.py             # Push-to-talk chord — global on Windows, windowed fallback elsewhere
+│   ├── hotkey.py             # Push-to-talk chord, while the window has focus
 │   ├── undo.py               # One shared undo stack — actions register how to reverse themselves
 │   ├── confirm.py            # Irreversible-action gate — the token is issued by the UI, not the model
 │   ├── audio_devices.py      # Microphone / speaker list — filtered, measured, resolved by name
