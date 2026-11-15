@@ -64,21 +64,7 @@ def _auto_ui_scale() -> float:
     Windows only, through calls that are not DPI-virtualised — so nothing about
     the process's DPI awareness is touched before Qt sets it. Elsewhere the
     system's own scaling is trusted and this returns 1."""
-    if sys.platform != "win32":
-        return 1.0
-    try:
-        import ctypes
-        user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
-        hdc = user32.GetDC(0)
-        try:
-            physical_h = gdi32.GetDeviceCaps(hdc, 117)      # DESKTOPVERTRES
-        finally:
-            user32.ReleaseDC(0, hdc)
-        percent = ctypes.windll.shcore.GetScaleFactorForDevice(0) or 100
-        logical_h = physical_h * 100.0 / percent
-    except Exception:
-        return 1.0
-    return max(1.0, min(2.0, round(logical_h / 900.0 * 20) / 20))
+    return 1.0
 
 
 def _apply_ui_scale() -> None:

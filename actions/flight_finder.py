@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from config import is_windows, is_mac, is_linux
+from config import is_linux
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -281,12 +281,7 @@ def _save_to_desktop(content: str, origin: str, destination: str) -> str:
     print(f"[FlightFinder] 💾 Saved: {filepath}")
 
     try:
-        if is_windows():
-            subprocess.Popen(["notepad.exe", str(filepath)])
-        elif is_mac():
-            subprocess.Popen(["open", "-t", str(filepath)])
-        else:
-            subprocess.Popen(["xdg-open", str(filepath)])
+        subprocess.Popen(["xdg-open", str(filepath)])
     except Exception as e:
         print(f"[FlightFinder] ⚠️ Could not open text editor: {e}")
 

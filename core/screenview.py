@@ -85,7 +85,6 @@ import hashlib
 import io
 import json
 import os
-import platform
 import threading
 import time
 from dataclasses import dataclass, field
@@ -94,16 +93,7 @@ from typing import Any, Callable, Iterable, Optional
 from core.appidentity import fold
 from core.lazyimport import installed
 
-_OS = {"Windows": "windows", "Darwin": "mac"}.get(platform.system(), "linux")
-
-
-# ---------------------------------------------------------------------------
-# Optional dependencies. Every one of these is checked without importing it —
-# find_spec reads metadata — so a machine that never opens the screen agent
-# pays nothing for the ones it does not have.
-# ---------------------------------------------------------------------------
-_HAS_PYWINAUTO = _OS == "windows" and installed("pywinauto")
-_HAS_PYOBJC = _OS == "mac" and installed("ApplicationServices")
+_OS = "linux"
 _HAS_ATSPI = _OS == "linux" and installed("pyatspi")
 _HAS_MSS = installed("mss")
 _HAS_PIL = installed("PIL")
@@ -172,40 +162,6 @@ INTERACTABLE = frozenset({
 # The planner needs these to check a postcondition: "the page shows X".
 READABLE = frozenset({ROLE_TEXT, ROLE_LIST, ROLE_TABLE, ROLE_ROW,
                       ROLE_WINDOW, ROLE_DIALOG, ROLE_IMAGE})
-
-
-# Windows UI Automation control types. These strings come from the UIA API, not
-# from the user's display language: a Turkish Windows still reports "Button".
-_UIA_ROLES = {
-    "button": ROLE_BUTTON, "splitbutton": ROLE_BUTTON,
-    "hyperlink": ROLE_LINK,
-    "edit": ROLE_EDIT,
-    # A UIA "Document" is a content SURFACE - a web page body, an editor
-    # canvas, a chat transcript - not a field you fill in. Mapping it to
-    # edit made a full-window rectangle look like the most inviting
-    # interactable thing on screen, and its centre is the middle of the
-    # display: a click there hits whatever happens to be under it. Real
-    # text inputs report control type "Edit".
-    "document": ROLE_TEXT,
-    "text": ROLE_TEXT, "statusbar": ROLE_TEXT,
-    "checkbox": ROLE_CHECKBOX,
-    "radiobutton": ROLE_RADIO,
-    "combobox": ROLE_COMBOBOX,
-    "list": ROLE_LIST, "listitem": ROLE_LISTITEM, "dataitem": ROLE_LISTITEM,
-    "menu": ROLE_MENU, "menubar": ROLE_MENU,
-    "menuitem": ROLE_MENUITEM,
-    "tab": ROLE_LIST, "tabitem": ROLE_TAB,
-    "slider": ROLE_SLIDER, "spinner": ROLE_SLIDER,
-    "image": ROLE_IMAGE,
-    "table": ROLE_TABLE, "datagrid": ROLE_TABLE,
-    "header": ROLE_ROW, "headeritem": ROLE_CELL,
-    "tree": ROLE_TREE, "treeitem": ROLE_TREEITEM,
-    "toolbar": ROLE_TOOLBAR,
-    "group": ROLE_GROUP, "pane": ROLE_GROUP, "custom": ROLE_GROUP,
-    "scrollbar": ROLE_SCROLLBAR,
-    "progressbar": ROLE_PROGRESS,
-    "window": ROLE_WINDOW, "titlebar": ROLE_WINDOW,
-}
 
 # macOS AX roles, minus the "AX" prefix, lowercased.
 _AX_ROLES = {
@@ -736,10 +692,6 @@ def _logical_screen() -> tuple[int, int, int, int]:
 def _foreground() -> tuple[str, str, int, Any]:
     """(process name, window title, pid, platform handle). Never raises."""
     try:
-        if _OS == "windows":
-            return _foreground_windows()
-        if _OS == "mac":
-            return _foreground_mac()
         return _foreground_linux()
     except Exception:
         return "", "", 0, None
@@ -754,77 +706,9 @@ def all_windows() -> list[tuple[str, str]]:
     application's message loop.
     """
     try:
-        if _OS == "windows":
-            return _all_windows_windows()
-        if _OS == "mac":
-            return _all_windows_mac()
         return _all_windows_linux()
     except Exception:
         return []
-
-
-def _all_windows_windows() -> list[tuple[str, str]]:
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    found: list[tuple[str, str]] = []
-    names: dict[int, str] = {}
-
-    callback = ctypes.WINFUNCTYPE(
-        ctypes.c_bool, ctypes.c_int, ctypes.POINTER(ctypes.c_int))
-
-    def visit(hwnd, _param):
-        try:
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            length = user32.GetWindowTextLengthW(hwnd)
-            if not length:
-                return True
-            buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buf, length + 1)
-            title = buf.value or ""
-            if not title.strip():
-                return True
-            pid = wintypes.DWORD(0)
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            key = int(pid.value)
-            if key not in names:
-                try:
-                    import psutil
-                    names[key] = psutil.Process(key).name()
-                except Exception:
-                    names[key] = ""
-            found.append((names[key], title))
-        except Exception:
-            pass
-        return True
-
-    user32.EnumWindows(callback(visit), None)
-    return found
-
-
-def _all_windows_mac() -> list[tuple[str, str]]:
-    # Quartz answers this without Accessibility permission, which matters: a
-    # machine that has not granted Accessibility can still tell whether the
-    # right document is open somewhere.
-    try:
-        import Quartz
-        options = (Quartz.kCGWindowListOptionOnScreenOnly
-                   | Quartz.kCGWindowListExcludeDesktopElements)
-        info = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
-    except Exception:
-        return []
-    found: list[tuple[str, str]] = []
-    for entry in info or []:
-        try:
-            title = str(entry.get("kCGWindowName") or "")
-            owner = str(entry.get("kCGWindowOwnerName") or "")
-            if title.strip():
-                found.append((owner, title))
-        except Exception:
-            continue
-    return found
 
 
 def _all_windows_linux() -> list[tuple[str, str]]:
@@ -849,46 +733,6 @@ def _all_windows_linux() -> list[tuple[str, str]]:
     return found
 
 
-def _foreground_windows() -> tuple[str, str, int, Any]:
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    hwnd = user32.GetForegroundWindow()
-    if not hwnd:
-        return "", "", 0, None
-
-    length = user32.GetWindowTextLengthW(hwnd)
-    buf = ctypes.create_unicode_buffer(length + 1)
-    user32.GetWindowTextW(hwnd, buf, length + 1)
-    title = buf.value or ""
-
-    pid = wintypes.DWORD(0)
-    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-
-    name = ""
-    try:
-        import psutil
-        name = psutil.Process(int(pid.value)).name()
-    except Exception:
-        pass
-    return name, title, int(pid.value), int(hwnd)
-
-
-def _foreground_mac() -> tuple[str, str, int, Any]:
-    from AppKit import NSWorkspace
-
-    app = NSWorkspace.sharedWorkspace().frontmostApplication()
-    if app is None:
-        return "", "", 0, None
-    name = str(app.localizedName() or "")
-    pid = int(app.processIdentifier())
-    # The window title comes from the AX tree, which the backend below reads
-    # anyway. Asking for it twice would mean two round trips into another
-    # process for one string.
-    return name, "", pid, pid
-
-
 def _foreground_linux() -> tuple[str, str, int, Any]:
     import pyatspi
 
@@ -910,264 +754,11 @@ def _foreground_linux() -> tuple[str, str, int, Any]:
             continue
     return "", "", 0, None
 
-
-# ---------------------------------------------------------------------------
-# Backend 1 — Windows UI Automation
-#
-# pywinauto is already a dependency, but its friendly wrappers are not what we
-# want: `descendants()` builds a full wrapper object per control and walks the
-# whole tree before returning, so there is no way to stop when the budget is
-# gone. We walk UIAElementInfo ourselves, which is the layer underneath, and
-# check the clock at every node.
-# ---------------------------------------------------------------------------
-def _scan_windows(hwnd: Any, scale: float, deadline: float) -> list[Element]:
-    from pywinauto.uia_element_info import UIAElementInfo
-
-    root = UIAElementInfo(hwnd)
-    out: list[Element] = []
-    # Breadth first, so that when the budget runs out what we have is the
-    # shallow, big, obvious controls rather than one deep branch of a sidebar.
-    frontier: list[tuple[Any, int]] = [(root, 0)]
-
-    visited = 0
-    while frontier and len(out) < MAX_ELEMENTS:
-        if time.monotonic() > deadline:
-            raise TimeoutError("accessibility scan exceeded its budget")
-
-        # Let everything else breathe, every so often.
-        #
-        # A tree walk is hundreds of cross-process calls in a tight Python loop,
-        # and this runs on a worker thread inside an application that is also
-        # streaming audio and animating a face at fifty frames a second. Without
-        # a yield the walk holds the interpreter for as long as it runs and the
-        # user hears it: the voice stutters and the HUD goes stiff. Sleeping for
-        # a millisecond every fiftieth node costs a few milliseconds per scan and
-        # gives the audio thread its turn.
-        visited += 1
-        if visited % 50 == 0:
-            time.sleep(0.001)
-
-        node, depth = frontier.pop(0)
-        try:
-            children = node.children() if depth < MAX_DEPTH else []
-        except Exception:
-            children = []
-
-        el = _element_from_uia(node, len(out), depth, scale)
-        if el is not None:
-            out.append(el)
-
-        for child in children:
-            frontier.append((child, depth + 1))
-
-    return out
-
-
-# UIA pattern ids. Numbers rather than names because the constants live in a
-# generated module that may not exist until pywinauto has initialised its UIA
-# backend, and these three have been fixed since UI Automation shipped.
-_UIA_VALUE_PATTERN = 10002
-_UIA_TEXT_PATTERN = 10014
-_UIA_TEXT_LIMIT = 400          # a document can be a novel; a postcondition is not
-
 # Roles whose CONTENT is a different thing from their label, and therefore
 # worth a pattern query. Everything else — a button, a menu item, a tab — says
 # all it has to say in its name, and asking would be a cross-process call per
 # element for nothing.
 _TEXTUAL_ROLES = frozenset({ROLE_EDIT, ROLE_COMBOBOX, ROLE_TEXT, ROLE_SLIDER})
-
-
-def _uia_value(info: Any, role: str, name: str) -> str:
-    """What a control currently CONTAINS, as opposed to what it is called.
-
-    THIS IS THE FIX FOR A WHOLE CLASS OF FALSE FAILURES
-        The first version read `rich_text`, on the reasonable-sounding basis
-        that it is UIA's "what does this control actually say". Measured
-        against a real edit control with the word hello in it:
-
-            name        'Text Editor'
-            rich_text   'Text Editor'      <- the label, every time
-            ValuePattern 'hello'           <- the content
-
-        So a field's contents were never read at all, and every postcondition
-        of the form "the box now contains what I typed" was false no matter
-        what happened on screen. The agent typed, checked, saw nothing, and
-        typed again — nine times, into a box that had held the right answer
-        since the first attempt.
-
-        `rich_text` is kept as a last resort because some controls do answer
-        with their content there and it costs nothing once the patterns have
-        already declined.
-
-    ValuePattern is the universal answer: an edit box, a combo box, an address
-    bar, a spin box and a web form field all implement it, on every application
-    framework, in every language. TextPattern covers documents and rich editors
-    that expose a range instead of a value. Both are asked through the raw COM
-    element, both are wrapped, and a control that implements neither simply has
-    no content to report.
-    """
-    if role not in _TEXTUAL_ROLES:
-        return ""
-    raw = getattr(info, "element", None)
-    if raw is None:
-        return ""
-
-    try:
-        from comtypes.gen import UIAutomationClient as _UIA
-    except Exception:
-        _UIA = None
-
-    if _UIA is not None:
-        try:
-            pattern = raw.GetCurrentPattern(_UIA_VALUE_PATTERN)
-            if pattern:
-                text = pattern.QueryInterface(
-                    _UIA.IUIAutomationValuePattern).CurrentValue
-                if isinstance(text, str) and text:
-                    return text[:_UIA_TEXT_LIMIT]
-        except Exception:
-            pass
-        try:
-            pattern = raw.GetCurrentPattern(_UIA_TEXT_PATTERN)
-            if pattern:
-                text = pattern.QueryInterface(
-                    _UIA.IUIAutomationTextPattern
-                ).DocumentRange.GetText(_UIA_TEXT_LIMIT)
-                if isinstance(text, str) and text.strip():
-                    return text[:_UIA_TEXT_LIMIT]
-        except Exception:
-            pass
-
-    try:
-        rich = getattr(info, "rich_text", None)
-        if isinstance(rich, str) and rich and rich != name:
-            return rich[:_UIA_TEXT_LIMIT]
-    except Exception:
-        pass
-    return ""
-
-
-def _element_from_uia(info: Any, eid: int, depth: int, scale: float) -> Optional[Element]:
-    """One UIAElementInfo to one Element, or None if it is not worth carrying.
-
-    Every attribute is read through getattr with a default. UIA is a
-    cross-process protocol and any property can raise COMError when the target
-    application is busy, mid-repaint, or shutting down — and one control that
-    is having a bad moment must not cost us the other four hundred.
-    """
-    try:
-        rect = getattr(info, "rectangle", None)
-        if rect is None:
-            return None
-        left, top = int(getattr(rect, "left", 0)), int(getattr(rect, "top", 0))
-        right, bottom = int(getattr(rect, "right", 0)), int(getattr(rect, "bottom", 0))
-    except Exception:
-        return None
-
-    width, height = right - left, bottom - top
-    if width < MIN_SIZE_PX or height < MIN_SIZE_PX:
-        return None
-
-    try:
-        visible = bool(getattr(info, "visible", True))
-    except Exception:
-        visible = True
-    if not visible:
-        return None
-
-    try:
-        name = str(getattr(info, "name", "") or "")
-    except Exception:
-        name = ""
-    try:
-        ctrl = str(getattr(info, "control_type", "") or "")
-    except Exception:
-        ctrl = ""
-    try:
-        enabled = bool(getattr(info, "enabled", True))
-    except Exception:
-        enabled = True
-
-    role = _UIA_ROLES.get(ctrl.replace(" ", "").lower(), ROLE_OTHER)
-
-    # UIA answers "is this a password box" directly, and it answers in the same
-    # way whatever language the box is labelled in. Read through the raw COM
-    # element because the friendly wrapper does not surface it.
-    #
-    # Asked FIRST, before any attempt to read content: never carry the contents
-    # of a secret field, not into a log, not into a digest, and above all not
-    # into a payload bound for a model.
-    protected = False
-    try:
-        raw = getattr(info, "element", None)
-        protected = bool(getattr(raw, "CurrentIsPassword", False))
-    except Exception:
-        protected = False
-
-    value = "" if protected else _uia_value(info, role, name)
-
-    # An element with no name, no value and no role worth clicking is scaffolding.
-    # Carrying it costs tokens and gives a matcher more chances to be wrong.
-    #
-    # Depth 0 is exempt. That node is the window itself, and dropping it was
-    # measured turning a UWP application into a view with literally zero
-    # elements — which reads as "the screen is empty" when the truth is "this
-    # window told us nothing about its contents". A window that is present is a
-    # fact worth carrying even when it is the only one.
-    if depth > 0 and not name and not value and role in (ROLE_OTHER, ROLE_GROUP):
-        return None
-
-    return Element(
-        eid=eid, role=role, name=name, value=value,
-        left=int(round(left * scale)), top=int(round(top * scale)),
-        width=int(round(width * scale)), height=int(round(height * scale)),
-        enabled=enabled, focused=False,
-        scrollable=role in (ROLE_LIST, ROLE_TABLE, ROLE_TREE, ROLE_GROUP),
-        depth=depth, protected=protected,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Backend 2 — macOS Accessibility
-#
-# AX reports in points, which is already the space the mouse is driven in, so
-# no scaling happens here. That is not an oversight: Retina doubles the PIXELS
-# and leaves the POINTS alone, and converting would put every click at twice
-# its correct offset.
-# ---------------------------------------------------------------------------
-def _scan_mac(pid: int, deadline: float) -> tuple[list[Element], str]:
-    import ApplicationServices as AS
-
-    if not AS.AXIsProcessTrusted():
-        raise PermissionError(
-            "macOS has not granted Accessibility permission to this app; "
-            "grant it in System Settings > Privacy & Security > Accessibility"
-        )
-
-    app = AS.AXUIElementCreateApplication(pid)
-    if app is None:
-        raise RuntimeError("the frontmost application exposes no accessibility tree")
-
-    out: list[Element] = []
-    title = ""
-    frontier: list[tuple[Any, int]] = [(app, 0)]
-
-    while frontier and len(out) < MAX_ELEMENTS:
-        if time.monotonic() > deadline:
-            raise TimeoutError("accessibility scan exceeded its budget")
-
-        node, depth = frontier.pop(0)
-        el, node_title = _element_from_ax(AS, node, len(out), depth)
-        if el is not None:
-            out.append(el)
-        if node_title and not title:
-            title = node_title
-
-        if depth < MAX_DEPTH:
-            for child in _ax_children(AS, node):
-                frontier.append((child, depth + 1))
-
-    return out, title
 
 
 def _ax_attr(AS: Any, node: Any, attribute: str) -> Any:
@@ -1577,8 +1168,6 @@ def capabilities() -> dict:
     one that silently returns nothing is not.
     """
     backend = {
-        "windows": ("uia", _HAS_PYWINAUTO, "pywinauto"),
-        "mac": ("ax", _HAS_PYOBJC, "pyobjc-framework-ApplicationServices"),
         "linux": ("atspi", _HAS_ATSPI, "pyatspi"),
     }[_OS]
     return {
@@ -1706,41 +1295,6 @@ def is_own_pid(pid: int) -> bool:
     return _is_own_window(pid)
 
 
-# ---------------------------------------------------------------------------
-# Which window is where, on each platform
-#
-# The actuator asks two questions before it touches anything: "whose window is
-# at this point" and "whose window has the keyboard". Both have to be answered
-# on all three platforms, because the answer is what stops a screen agent
-# clicking or typing into the assistant's own interface.
-# ---------------------------------------------------------------------------
-def _quartz_windows(normal_layer_only: bool = True) -> list[tuple[int, tuple]]:
-    """macOS on-screen windows, front to back, as (owner pid, rect in points).
-
-    Quartz answers without Accessibility permission, and in the same points the
-    mouse is driven in.
-    """
-    import Quartz
-    options = (Quartz.kCGWindowListOptionOnScreenOnly
-               | Quartz.kCGWindowListExcludeDesktopElements)
-    out: list[tuple[int, tuple]] = []
-    for entry in Quartz.CGWindowListCopyWindowInfo(options,
-                                                   Quartz.kCGNullWindowID) or []:
-        try:
-            if normal_layer_only and int(entry.get("kCGWindowLayer", 0)) != 0:
-                continue
-            if float(entry.get("kCGWindowAlpha", 1.0)) <= 0.01:
-                continue
-            b = entry.get("kCGWindowBounds") or {}
-            rect = (int(b.get("X", 0)), int(b.get("Y", 0)),
-                    int(b.get("Width", 0)), int(b.get("Height", 0)))
-            if rect[2] > 0 and rect[3] > 0:
-                out.append((int(entry.get("kCGWindowOwnerPID", 0)), rect))
-        except Exception:
-            continue
-    return out
-
-
 def _x11_display():
     if not os.environ.get("DISPLAY"):
         return None
@@ -1789,10 +1343,9 @@ def _x11_active_pid() -> int:
 def foreground_pid() -> int:
     """The process whose window has the keyboard. 0 when nobody will say."""
     try:
-        if _OS == "linux":
-            pid = _x11_active_pid()
-            if pid:
-                return pid
+        pid = _x11_active_pid()
+        if pid:
+            return pid
         return int(_foreground()[2] or 0)
     except Exception:
         return 0
@@ -1806,25 +1359,6 @@ def window_pid_at(x: int, y: int) -> int:
     moving, which makes that the normal case rather than a limitation.
     """
     try:
-        if _OS == "windows":
-            import ctypes
-            from ctypes import wintypes
-            # A private handle on user32, so the prototypes set here never
-            # leak into anybody else's calls through the shared windll object.
-            user32 = ctypes.WinDLL("user32")
-            user32.WindowFromPoint.argtypes = [wintypes.POINT]
-            user32.WindowFromPoint.restype = wintypes.HWND
-            hwnd = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
-            if not hwnd:
-                return 0
-            pid = wintypes.DWORD(0)
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            return int(pid.value)
-        if _OS == "mac":
-            for pid, (left, top, width, height) in _quartz_windows(False):
-                if left <= x < left + width and top <= y < top + height:
-                    return pid
-            return 0
         disp = _x11_display()
         if disp is None:
             return 0
@@ -1849,37 +1383,6 @@ def own_window_rects() -> list[tuple[int, int, int, int]]:
     """
     me = os.getpid()
     try:
-        if _OS == "windows":
-            import ctypes
-            from ctypes import wintypes
-            user32 = ctypes.WinDLL("user32")
-            scale = _physical_to_logical()
-            found: list[tuple[int, int, int, int]] = []
-            callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND,
-                                          wintypes.LPARAM)
-
-            def visit(hwnd, _param):
-                try:
-                    if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
-                        return True
-                    pid = wintypes.DWORD(0)
-                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if int(pid.value) != me:
-                        return True
-                    rect = wintypes.RECT()
-                    if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                        w, h = rect.right - rect.left, rect.bottom - rect.top
-                        if w > 0 and h > 0:
-                            found.append((int(rect.left * scale), int(rect.top * scale),
-                                          int(w * scale), int(h * scale)))
-                except Exception:
-                    pass
-                return True
-
-            user32.EnumWindows(callback(visit), 0)
-            return found
-        if _OS == "mac":
-            return [rect for pid, rect in _quartz_windows(False) if pid == me]
         disp = _x11_display()
         if disp is None:
             return []
@@ -1907,21 +1410,7 @@ def own_window_rects() -> list[tuple[int, int, int, int]]:
 def _foreground_rect(handle: Any, pid: int, scale: float) -> tuple[int, int, int, int]:
     """The foreground window's rectangle, in mouse coordinates. Never raises."""
     try:
-        if _OS == "windows" and handle:
-            import ctypes
-            from ctypes import wintypes
-            rect = wintypes.RECT()
-            if ctypes.WinDLL("user32").GetWindowRect(wintypes.HWND(int(handle)),
-                                                     ctypes.byref(rect)):
-                w, h = rect.right - rect.left, rect.bottom - rect.top
-                if w > 0 and h > 0:
-                    return (int(round(rect.left * scale)), int(round(rect.top * scale)),
-                            int(round(w * scale)), int(round(h * scale)))
-        elif _OS == "mac" and pid:
-            for owner, rect in _quartz_windows():
-                if owner == pid:
-                    return rect
-        elif _OS == "linux" and handle is not None:
+        if handle is not None:
             import pyatspi
             ext = handle.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
             if ext.width > 0 and ext.height > 0:
@@ -1932,7 +1421,7 @@ def _foreground_rect(handle: Any, pid: int, scale: float) -> tuple[int, int, int
 
 
 def _accessibility_source() -> str:
-    return {"windows": "uia", "mac": "ax", "linux": "atspi"}[_OS]
+    return {"linux": "atspi"}[_OS]
 
 
 def _thinness_reason(app: str, elements: list[Element],
@@ -1970,11 +1459,7 @@ def missing_packages() -> list[str]:
     """What to install to make this machine's perception work. Empty when it
     already does."""
     out: list[str] = []
-    if _OS == "windows" and not _HAS_PYWINAUTO:
-        out.append("pywinauto")
-    if _OS == "mac" and not _HAS_PYOBJC:
-        out.append("pyobjc-framework-ApplicationServices")
-    if _OS == "linux" and not _HAS_ATSPI:
+    if not _HAS_ATSPI:
         out.append("pyatspi")
     if not _HAS_MSS:
         out.append("mss")
@@ -2044,15 +1529,7 @@ def look(*, budget_s: float = SCAN_BUDGET_S, allow_ocr: bool = True) -> View:
     else:
         try:
             elements: list[Element] = []
-            if _OS == "windows" and _HAS_PYWINAUTO and handle:
-                elements = _scan_windows(handle, scale, deadline)
-                view.source = "uia"
-            elif _OS == "mac" and _HAS_PYOBJC and pid:
-                elements, ax_title = _scan_mac(pid, deadline)
-                view.source = "ax"
-                if ax_title and not view.title:
-                    view.title = ax_title
-            elif _OS == "linux" and _HAS_ATSPI:
+            if _HAS_ATSPI:
                 elements = _scan_linux(handle, deadline)
                 view.source = "atspi"
             else:

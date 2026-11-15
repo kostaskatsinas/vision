@@ -41,7 +41,6 @@ WHAT THIS MODULE DOES ABOUT IT
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 from dataclasses import dataclass, field
 
@@ -83,24 +82,6 @@ def detect() -> Support:
     runs at startup and because the expensive way to find out is to try the
     action and watch it silently do nothing, which is the problem.
     """
-    system = platform.system()
-
-    if system == "Windows":
-        return Support(os_name="Windows")
-
-    if system == "Darwin":
-        support = Support(os_name="macOS")
-        # There is no reliable way to READ the Accessibility permission without
-        # a native extension, so this cannot be a hard answer — it is a warning
-        # attached to the thing people actually get wrong.
-        support.notes.append(
-            "macOS asks for two permissions before an assistant can drive the "
-            "computer: Accessibility (to type and click) and Screen Recording "
-            "(to see the screen), both under System Settings > Privacy & "
-            "Security. Until they are granted, those actions appear to succeed "
-            "and do nothing."
-        )
-        return support
 
     # ── Linux ────────────────────────────────────────────────────────────────
     session = _linux_session()

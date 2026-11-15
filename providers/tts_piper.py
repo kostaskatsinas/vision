@@ -79,17 +79,9 @@ def _voice_dir() -> Path:
         pass
 
     import os
-    import platform
 
-    system = platform.system()
-    if system == "Windows":
-        root = Path(os.environ.get("LOCALAPPDATA")
-                    or Path.home() / "AppData" / "Local")
-    elif system == "Darwin":
-        root = Path.home() / "Library" / "Application Support"
-    else:
-        root = Path(os.environ.get("XDG_DATA_HOME")
-                    or Path.home() / ".local" / "share")
+    root = Path(os.environ.get("XDG_DATA_HOME")
+                or Path.home() / ".local" / "share")
     fallback = root / "MarkAssistant" / "piper-voices"
     try:
         fallback.mkdir(parents=True, exist_ok=True)

@@ -101,55 +101,55 @@ def fold(text: str) -> str:
 # that genuinely differ between operating systems. A name that is the same
 # everywhere does not belong here — it already works without an entry.
 ALIASES: dict[str, dict[str, str]] = {
-    "chrome":             {"Windows": "chrome",            "Darwin": "Google Chrome",        "Linux": "google-chrome"},
-    "google chrome":      {"Windows": "chrome",            "Darwin": "Google Chrome",        "Linux": "google-chrome"},
-    "firefox":            {"Windows": "firefox",           "Darwin": "Firefox",              "Linux": "firefox"},
-    "edge":               {"Windows": "msedge",            "Darwin": "Microsoft Edge",       "Linux": "microsoft-edge"},
-    "brave":              {"Windows": "brave",             "Darwin": "Brave Browser",        "Linux": "brave-browser"},
-    "safari":             {"Windows": "msedge",            "Darwin": "Safari",               "Linux": "firefox"},
-    "opera":              {"Windows": "opera",             "Darwin": "Opera",                "Linux": "opera"},
-    "whatsapp":           {"Windows": "WhatsApp",          "Darwin": "WhatsApp",             "Linux": "whatsapp"},
-    "telegram":           {"Windows": "Telegram",          "Darwin": "Telegram",             "Linux": "telegram"},
-    "discord":            {"Windows": "Discord",           "Darwin": "Discord",              "Linux": "discord"},
-    "slack":              {"Windows": "Slack",             "Darwin": "Slack",                "Linux": "slack"},
-    "zoom":               {"Windows": "Zoom",              "Darwin": "zoom.us",              "Linux": "zoom"},
-    "teams":              {"Windows": "msteams",           "Darwin": "Microsoft Teams",      "Linux": "teams"},
-    "skype":              {"Windows": "skype",             "Darwin": "Skype",                "Linux": "skype"},
-    "signal":             {"Windows": "signal",            "Darwin": "Signal",               "Linux": "signal"},
-    "spotify":            {"Windows": "Spotify",           "Darwin": "Spotify",              "Linux": "spotify"},
-    "vlc":                {"Windows": "vlc",               "Darwin": "VLC",                  "Linux": "vlc"},
-    "netflix":            {"Windows": "Netflix",           "Darwin": "Netflix",              "Linux": "firefox"},
-    "vscode":             {"Windows": "code",              "Darwin": "Visual Studio Code",   "Linux": "code"},
-    "visual studio code": {"Windows": "code",              "Darwin": "Visual Studio Code",   "Linux": "code"},
-    "code":               {"Windows": "code",              "Darwin": "Visual Studio Code",   "Linux": "code"},
-    "terminal":           {"Windows": "wt",                "Darwin": "Terminal",             "Linux": "x-terminal-emulator"},
-    "cmd":                {"Windows": "cmd.exe",           "Darwin": "Terminal",             "Linux": "bash"},
-    "powershell":         {"Windows": "powershell.exe",    "Darwin": "Terminal",             "Linux": "bash"},
-    "postman":            {"Windows": "Postman",           "Darwin": "Postman",              "Linux": "postman"},
-    "git":                {"Windows": "git-bash",          "Darwin": "Terminal",             "Linux": "bash"},
-    "figma":              {"Windows": "Figma",             "Darwin": "Figma",                "Linux": "figma"},
-    "blender":            {"Windows": "blender",           "Darwin": "Blender",              "Linux": "blender"},
-    "word":               {"Windows": "winword",           "Darwin": "Microsoft Word",       "Linux": "libreoffice --writer"},
-    "excel":              {"Windows": "excel",             "Darwin": "Microsoft Excel",      "Linux": "libreoffice --calc"},
-    "powerpoint":         {"Windows": "powerpnt",          "Darwin": "Microsoft PowerPoint", "Linux": "libreoffice --impress"},
-    "libreoffice":        {"Windows": "soffice",           "Darwin": "LibreOffice",          "Linux": "libreoffice"},
-    "notepad":            {"Windows": "notepad.exe",       "Darwin": "TextEdit",             "Linux": "gedit"},
-    "textedit":           {"Windows": "notepad.exe",       "Darwin": "TextEdit",             "Linux": "gedit"},
-    "explorer":           {"Windows": "explorer.exe",      "Darwin": "Finder",               "Linux": "nautilus"},
-    "file explorer":      {"Windows": "explorer.exe",      "Darwin": "Finder",               "Linux": "nautilus"},
-    "finder":             {"Windows": "explorer.exe",      "Darwin": "Finder",               "Linux": "nautilus"},
-    "task manager":       {"Windows": "taskmgr.exe",       "Darwin": "Activity Monitor",     "Linux": "gnome-system-monitor"},
-    "settings":           {"Windows": "ms-settings:",      "Darwin": "System Preferences",   "Linux": "gnome-control-center"},
-    "calculator":         {"Windows": "calc.exe",          "Darwin": "Calculator",           "Linux": "gnome-calculator"},
-    "paint":              {"Windows": "mspaint.exe",       "Darwin": "Preview",              "Linux": "gimp"},
-    "instagram":          {"Windows": "Instagram",         "Darwin": "Instagram",            "Linux": "firefox"},
-    "tiktok":             {"Windows": "TikTok",            "Darwin": "TikTok",               "Linux": "firefox"},
-    "notion":             {"Windows": "Notion",            "Darwin": "Notion",               "Linux": "notion"},
-    "obsidian":           {"Windows": "Obsidian",          "Darwin": "Obsidian",             "Linux": "obsidian"},
-    "capcut":             {"Windows": "CapCut",            "Darwin": "CapCut",               "Linux": "capcut"},
-    "steam":              {"Windows": "steam",             "Darwin": "Steam",                "Linux": "steam"},
-    "epic":               {"Windows": "EpicGamesLauncher", "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
-    "epic games":         {"Windows": "EpicGamesLauncher", "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
+    "chrome":             {"Linux": "google-chrome"},
+    "google chrome":      {"Linux": "google-chrome"},
+    "firefox":            {"Linux": "firefox"},
+    "edge":               {"Linux": "microsoft-edge"},
+    "brave":              {"Linux": "brave-browser"},
+    "safari":             {"Linux": "firefox"},
+    "opera":              {"Linux": "opera"},
+    "whatsapp":           {"Linux": "whatsapp"},
+    "telegram":           {"Linux": "telegram"},
+    "discord":            {"Linux": "discord"},
+    "slack":              {"Linux": "slack"},
+    "zoom":               {"Linux": "zoom"},
+    "teams":              {"Linux": "teams"},
+    "skype":              {"Linux": "skype"},
+    "signal":             {"Linux": "signal"},
+    "spotify":            {"Linux": "spotify"},
+    "vlc":                {"Linux": "vlc"},
+    "netflix":            {"Linux": "firefox"},
+    "vscode":             {"Linux": "code"},
+    "visual studio code": {"Linux": "code"},
+    "code":               {"Linux": "code"},
+    "terminal":           {"Linux": "x-terminal-emulator"},
+    "cmd":                {"Linux": "bash"},
+    "powershell":         {"Linux": "bash"},
+    "postman":            {"Linux": "postman"},
+    "git":                {"Linux": "bash"},
+    "figma":              {"Linux": "figma"},
+    "blender":            {"Linux": "blender"},
+    "word":               {"Linux": "libreoffice --writer"},
+    "excel":              {"Linux": "libreoffice --calc"},
+    "powerpoint":         {"Linux": "libreoffice --impress"},
+    "libreoffice":        {"Linux": "libreoffice"},
+    "notepad":            {"Linux": "gedit"},
+    "textedit":           {"Linux": "gedit"},
+    "explorer":           {"Linux": "nautilus"},
+    "file explorer":      {"Linux": "nautilus"},
+    "finder":             {"Linux": "nautilus"},
+    "task manager":       {"Linux": "gnome-system-monitor"},
+    "settings":           {"Linux": "gnome-control-center"},
+    "calculator":         {"Linux": "gnome-calculator"},
+    "paint":              {"Linux": "gimp"},
+    "instagram":          {"Linux": "firefox"},
+    "tiktok":             {"Linux": "firefox"},
+    "notion":             {"Linux": "notion"},
+    "obsidian":           {"Linux": "obsidian"},
+    "capcut":             {"Linux": "capcut"},
+    "steam":              {"Linux": "steam"},
+    "epic":               {"Linux": "legendary"},
+    "epic games":         {"Linux": "legendary"},
 }
 
 
@@ -449,37 +449,7 @@ def _windows_by_pid() -> dict[int, list[str]]:
     another external tool, and a missing tool must not be the difference
     between closing the right application and the wrong one.
     """
-    if _OS != "Windows":
-        return {}
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        titles: dict[int, list[str]] = {}
-
-        WNDENUMPROC = ctypes.WINFUNCTYPE(
-            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
-        )
-
-        def _collect(hwnd, _lparam):
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length <= 0:
-                return True
-            buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buf, length + 1)
-            pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            titles.setdefault(int(pid.value), []).append(buf.value)
-            return True
-
-        user32.EnumWindows(WNDENUMPROC(_collect), 0)
-        return titles
-    except Exception as exc:
-        print(f"[appidentity] window enumeration unavailable: {exc}")
-        return {}
+    return {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -728,36 +698,7 @@ def _post_close_windows(pid: int) -> int:
     kill with no such chance — so it must never be the first thing tried on a
     desktop application somebody is using.
     """
-    if _OS != "Windows":
-        return 0
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        WM_CLOSE = 0x0010
-        asked = 0
-
-        WNDENUMPROC = ctypes.WINFUNCTYPE(
-            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
-        )
-
-        def _maybe_close(hwnd, _lparam):
-            nonlocal asked
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            owner = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-            if int(owner.value) == pid:
-                user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
-                asked += 1
-            return True
-
-        user32.EnumWindows(WNDENUMPROC(_maybe_close), 0)
-        return asked
-    except Exception as exc:
-        print(f"[appidentity] WM_CLOSE failed for pid {pid}: {exc}")
-        return 0
+    return 0
 
 
 def request_close(match: Match, timeout: float = 6.0) -> tuple[bool, str]:
@@ -849,30 +790,7 @@ def request_close(match: Match, timeout: float = 6.0) -> tuple[bool, str]:
 
 def _hwnds_for(pid: int) -> list[int]:
     """Visible top-level window handles belonging to one process (Windows)."""
-    if _OS != "Windows":
-        return []
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        found: list[int] = []
-        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND,
-                                         wintypes.LPARAM)
-
-        def _collect(hwnd, _lparam):
-            if user32.IsWindowVisible(hwnd):
-                owner = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-                if int(owner.value) == pid:
-                    found.append(int(hwnd))
-            return True
-
-        user32.EnumWindows(WNDENUMPROC(_collect), 0)
-        return found
-    except Exception as exc:
-        print(f"[appidentity] window handles unavailable: {exc}")
-        return []
+    return []
 
 
 def focus(match: "Match") -> bool:
@@ -893,72 +811,6 @@ def focus(match: "Match") -> bool:
     returns False rather than pretending, and the caller falls through to
     launching it, which is what brings a tray app back.
     """
-    if _OS == "Windows":
-        hwnds = _hwnds_for(match.pid)
-        if not hwnds:
-            return False
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            user32 = ctypes.WinDLL("user32", use_last_error=True)
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            SW_RESTORE = 9
-
-            # WINDOWS REFUSES TO LET A BACKGROUND PROCESS STEAL FOCUS.
-            #
-            # SetForegroundWindow only succeeds when the calling process
-            # already owns the foreground — a rule that exists so a background
-            # program cannot yank the screen away mid-sentence. It is also
-            # exactly our situation: the user says "open WhatsApp" while
-            # working in something else, so the assistant is NOT in front and
-            # the call is refused. Seen directly in testing — the same code
-            # succeeded twelve times in a row with the HUD in front, and failed
-            # every time with another window focused.
-            #
-            # The documented way through is to borrow the foreground thread's
-            # input queue for the length of the call: while two threads share
-            # one queue, Windows treats them as the same context and allows the
-            # change. Attach, raise, detach.
-            def _raise(hwnd) -> bool:
-                if user32.IsIconic(hwnd):
-                    user32.ShowWindow(hwnd, SW_RESTORE)
-                if user32.SetForegroundWindow(hwnd):
-                    return True
-
-                fore = user32.GetForegroundWindow()
-                if not fore:
-                    return False
-                their = user32.GetWindowThreadProcessId(fore, None)
-                ours = kernel32.GetCurrentThreadId()
-                if their == ours:
-                    return False
-                if not user32.AttachThreadInput(ours, their, True):
-                    return False
-                try:
-                    user32.BringWindowToTop(hwnd)
-                    return bool(user32.SetForegroundWindow(hwnd))
-                finally:
-                    user32.AttachThreadInput(ours, their, False)
-
-            for hwnd in hwnds:
-                if _raise(hwnd):
-                    return True
-            return False
-        except Exception as exc:
-            print(f"[appidentity] focus failed: {exc}")
-            return False
-
-    if _OS == "Darwin":
-        try:
-            r = subprocess.run(
-                ["osascript", "-e",
-                 f'tell application "System Events" to set frontmost of the '
-                 f'first process whose unix id is {match.pid} to true'],
-                capture_output=True, timeout=5)
-            return r.returncode == 0
-        except Exception:
-            return False
 
     # Linux. There is no single API here — X11 window management is whatever
     # the user installed — so the two tools nearly every desktop ships are
