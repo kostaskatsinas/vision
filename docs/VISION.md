@@ -112,6 +112,22 @@ python main.py
 `setup.py` installs the Python packages and the Playwright browsers. On first
 launch, paste a Gemini API key into the setup screen.
 
+After cloning, you can do all of the above with one command instead:
+
+```bash
+./vision.sh            # create .venv and install on first run, then start
+./vision.sh --update   # pull the latest code first, then start
+```
+
+`vision.sh` only re-runs `setup.py` when `requirements.txt` or `setup.py`
+changes. To start Vision from any folder, link it onto your PATH once:
+
+```bash
+mkdir -p ~/.local/bin && ln -sf "$PWD/vision.sh" ~/.local/bin/vision
+```
+
+Then type `vision` in any terminal.
+
 Some voice actions call native tools. Install the ones you use with your
 package manager:
 
