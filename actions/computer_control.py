@@ -165,6 +165,40 @@ def _user_profile() -> dict:
         pass
     return {}
 
+def _on_wayland() -> bool:
+    """True when input and capture go through core/wayland_desktop.py."""
+    try:
+        from core import wayland_desktop
+        return wayland_desktop.available()
+    except Exception:
+        return False
+
+
+def _use_screen(which: str) -> str:
+    if not _on_wayland():
+        return "Choosing a screen is only needed on Wayland; nothing changed."
+    from core import wayland_desktop
+    chosen = wayland_desktop.use_monitor(which or "next")
+    return (f"Now working on screen {chosen['number']} "
+            f"({chosen['width']}x{chosen['height']}). "
+            f"All screens: {wayland_desktop.describe_monitors()}")
+
+
+def _list_screens() -> str:
+    if not _on_wayland():
+        w, h = pyautogui.size()
+        return f"One working screen, {w}x{h}."
+    from core import wayland_desktop
+    return wayland_desktop.describe_monitors()
+
+
+def _release() -> str:
+    if not _on_wayland():
+        return "Nothing to release on this system."
+    from core import wayland_desktop
+    return f"Mouse, keyboard and screen: {wayland_desktop.release()}."
+
+
 def _type(text: str, interval: float = 0.03) -> str:
     _require_pyautogui()
     time.sleep(0.3)
@@ -178,7 +212,9 @@ def _smart_type(text: str, clear_first: bool = True) -> str:
         _clear_field()
         time.sleep(0.1)
 
-    if len(text) > 20 and _require_pyperclip():
+    # Vision: on Wayland the text is typed directly. The clipboard route needs
+    # extra tools there and would overwrite whatever the user had copied.
+    if len(text) > 20 and _require_pyperclip() and not _on_wayland():
         pyperclip.copy(text)
         time.sleep(0.1)
         paste_key = "ctrl"
@@ -437,6 +473,14 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         _require_pyautogui()
         w, h  = pyautogui.size()
         img   = pyautogui.screenshot()
+        # Vision: a very wide screen (5120 px here) is shrunk before it is
+        # sent, and the answer scaled back. The model reads positions off the
+        # image it is given, so it is told that image's size.
+        full_w = w
+        if w > 2560:
+            ratio = 2560 / w
+            img   = img.resize((2560, max(1, round(h * ratio))))
+            w, h  = img.size
         buf   = io.BytesIO()
         img.save(buf, format="PNG")
         image_bytes = buf.getvalue()
@@ -462,7 +506,8 @@ def _screen_find(description: str) -> tuple[int, int] | None:
 
         match = re.search(r"(\d+)\s*,\s*(\d+)", text)
         if match:
-            return int(match.group(1)), int(match.group(2))
+            back = full_w / w
+            return round(int(match.group(1)) * back), round(int(match.group(2)) * back)
 
     except Exception as e:
         print(f"[ComputerControl] ⚠️ screen_find failed: {e}")
@@ -583,6 +628,15 @@ def computer_control(
         if action == "screenshot":
             return _screenshot(params.get("path"))
 
+        if action in ("use_screen", "switch_screen", "use_monitor"):
+            return _use_screen(str(params.get("screen") or params.get("text") or ""))
+
+        if action in ("screens", "list_screens"):
+            return _list_screens()
+
+        if action in ("release", "hands_off", "stop_control"):
+            return _release()
+
         if action == "screen_find":
             coords = _screen_find(params.get("description", ""))
             return f"{coords[0]},{coords[1]}" if coords else "NOT_FOUND"
@@ -650,7 +704,17 @@ TOOL = {
         "Read the status the tool returns: 'done' means it was confirmed, "
         "'unverified' means it was requested and could NOT be confirmed - say "
         "so rather than claiming success - and 'ask' means nothing was done "
-        "and the question must go to the user first."
+        "and the question must go to the user first. "
+        "MOUSE AND KEYBOARD RULES: you may click, move, drag, scroll, press "
+        "keys or type ONLY when the user asked for it in what they just said "
+        "('take the mouse', 'click ...', 'type ...', 'scroll down'). Never do "
+        "it on your own initiative, and never to finish a task they did not "
+        "ask you to drive. When asked to type, type exactly the words they "
+        "dictated and do NOT press Enter afterwards unless they said to. When "
+        "the user says stop, hands off, let go or release, call "
+        "action='release' at once and do nothing else. With several screens, "
+        "x and y are positions on the working screen: use action='screens' to "
+        "list them and action='use_screen' with 'screen' to change it."
     ),
     # Used in place of `description` only when a small model is on a tool
     # budget - Gemini still gets the full text. See providers/schema.py.
@@ -662,7 +726,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | close_app | screen_find | screen_click | random_data | user_data"
+                "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | close_app | screen_find | screen_click | screens | use_screen | release | random_data | user_data"
             },
             "app_name": {
                 "type": "STRING",
@@ -735,6 +799,10 @@ TOOL = {
             "path": {
                 "type": "STRING",
                 "description": "Save path for screenshot"
+            },
+            "screen": {
+                "type": "STRING",
+                "description": "For use_screen: a screen number from action='screens', or left | right | top | bottom | main | next"
             }
         },
         "required": [

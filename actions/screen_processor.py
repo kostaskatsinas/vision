@@ -87,6 +87,18 @@ def _compress(img_bytes: bytes, source_format: str = "PNG") -> tuple[bytes, str]
 
 def _capture_screen() -> tuple[bytes, str]:
 
+    # Vision: on Wayland mss cannot capture, so the frame comes from the
+    # desktop portal (core/wayland_desktop.py) - the working screen.
+    try:
+        from core import wayland_desktop
+        on_wayland = wayland_desktop.available()
+    except Exception:
+        on_wayland = False
+    if on_wayland:
+        buf = io.BytesIO()
+        wayland_desktop.screenshot().save(buf, format="PNG", compress_level=1)
+        return _compress(buf.getvalue(), "PNG")
+
     if not _MSS:
         raise RuntimeError("mss is not installed. Run: pip install mss")
 

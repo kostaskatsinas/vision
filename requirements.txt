@@ -40,6 +40,9 @@ yt-dlp
 # ── Automation / input control ────────────────────────────────────────────────
 pyautogui
 pyperclip
+# Vision: on Wayland, input and screen capture go through the desktop portal
+# over D-Bus (core/wayland_desktop.py). Pure Python, no compiled parts.
+jeepney>=0.8,<1
 
 # ── Vision & media ────────────────────────────────────────────────────────────
 pillow>=10,<13
