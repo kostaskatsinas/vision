@@ -39,7 +39,7 @@ from gui.theme import (
 
 from collections import deque
 
-from PyQt6.QtGui import QPolygonF, QTextBlockFormat, QTextCharFormat
+from PyQt6.QtGui import QPolygonF, QTextBlockFormat, QTextCharFormat, QTextCursor
 
 from gui.style import (blend, chamfer, hud_font, px_font, scroll_css, with_alpha)
 
@@ -146,6 +146,11 @@ class LogWidget(QTextEdit):
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._sig.connect(self._enqueue)
+        # Pin the widget's own cursor at the start so text appended at the end
+        # never drags it along (see _end_cursor below for why that matters).
+        pin = self.textCursor()
+        pin.setKeepPositionOnInsert(True)
+        self.setTextCursor(pin)
 
     def append_log(self, text: str):
         self._sig.emit(text)
@@ -192,8 +197,7 @@ class LogWidget(QTextEdit):
         self._tag, self._text, self._pos = tag, words, 0
         label_col, text_col = self._colours(tag)
 
-        cur = self.textCursor()
-        cur.movePosition(cur.MoveOperation.End)
+        cur = self._end_cursor()
         head = QTextBlockFormat()
         if self.document().isEmpty():
             cur.setBlockFormat(head)
@@ -214,18 +218,33 @@ class LogWidget(QTextEdit):
         self._fmt = QTextCharFormat()
         self._fmt.setFont(px_font(13))
         self._fmt.setForeground(QBrush(text_col))
-        self.setTextCursor(cur)
-        self.ensureCursorVisible()
-        self._tmr.start(6)
+        self._scroll_to_end()
+        self._tmr.start(self._TYPE_MS)
+
+    # Vision: the log is written through a detached document cursor and the
+    # view is scrolled by its scrollbar. The widget's own text cursor never
+    # moves. Calling setTextCursor() per typed letter sent a caret-moved
+    # accessibility event every 6 ms; with GNOME's magnifier or a screen reader
+    # on, gnome-shell then asks the app for the caret position and blocks its
+    # main thread waiting, which froze the whole desktop and the mouse pointer.
+    _TYPE_MS = 18       # one tick
+    _TYPE_CHARS = 3     # letters per tick: same speed as 1 letter per 6 ms
+
+    def _end_cursor(self) -> QTextCursor:
+        cur = QTextCursor(self.document())
+        cur.movePosition(QTextCursor.MoveOperation.End)
+        return cur
+
+    def _scroll_to_end(self) -> None:
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def _step(self):
         if self._pos < len(self._text):
-            cur = self.textCursor()
-            cur.movePosition(cur.MoveOperation.End)
-            cur.insertText(self._text[self._pos], self._fmt)
-            self.setTextCursor(cur)
-            self.ensureCursorVisible()
-            self._pos += 1
+            chunk = self._text[self._pos:self._pos + self._TYPE_CHARS]
+            self._end_cursor().insertText(chunk, self._fmt)
+            self._scroll_to_end()
+            self._pos += len(chunk)
         else:
             self._tmr.stop()
             QTimer.singleShot(20, self._next)
