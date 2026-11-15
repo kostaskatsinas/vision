@@ -6,4 +6,4 @@ so main.py, plugins and anything written against Mark LVI keep working.
 import os
 
 # Before any Qt import: Qt's video backend prints signed stream URLs otherwise.
-os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false")
+os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false;qt.qpa.wayland.textinput=false")

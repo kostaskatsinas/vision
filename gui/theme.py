@@ -21,7 +21,7 @@ import psutil
 # and it puts a URL carrying the viewer's IP address into a terminal people
 # paste into bug reports. Silenced here, before Qt initialises its logging.
 # An explicit setting from the user is left alone.
-os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false")
+os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false;qt.qpa.wayland.textinput=false")
 
 from PyQt6.QtCore import (
     QEasingCurve, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPointF,

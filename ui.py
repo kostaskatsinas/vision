@@ -21,7 +21,7 @@ from pathlib import Path
 import psutil
 
 # Before any Qt import: Qt's video backend prints signed stream URLs otherwise.
-os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false")
+os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false;qt.qpa.wayland.textinput=false")
 
 from PyQt6.QtWidgets import QApplication
 
@@ -83,9 +83,33 @@ def _apply_ui_scale() -> None:
         os.environ["QT_SCALE_FACTOR"] = f"{scale:.2f}"
 
 
+# Vision: Qt warnings that are known to be harmless on GNOME Wayland and at
+# shutdown. They flood the terminal and hide real errors. Set
+# VISION_QT_DEBUG=1 to see every Qt message again.
+_QT_NOISE = (
+    "QTextCursor::setPosition: Position",
+    "Timers cannot be stopped from another thread",
+    "QtDBus: cannot relay signals from parent",
+)
+
+
+def _install_qt_message_filter() -> None:
+    if os.environ.get("VISION_QT_DEBUG"):
+        return
+    from PyQt6.QtCore import qInstallMessageHandler
+
+    def _handler(_mode, _context, message):
+        if any(noise in message for noise in _QT_NOISE):
+            return
+        print(message, file=sys.stderr)
+
+    qInstallMessageHandler(_handler)
+
+
 class JarvisUI:
     def __init__(self, face_path: str, size=None):
         _apply_ui_scale()
+        _install_qt_message_filter()
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
