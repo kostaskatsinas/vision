@@ -443,8 +443,7 @@ TOOL_DECLARATIONS = [
     {
         "name": "shutdown_jarvis",
         "description": (
-            "Shuts down the assistant completely, after the user confirms it "
-            "on screen. Call this ONLY when the user clearly asks to close, "
+            "Shuts down the assistant completely. Call this ONLY when the user clearly asks to close, "
             "quit or shut down the assistant itself. Do NOT call it for "
             "'stop', 'thanks', 'goodbye' or 'close <some app>'; 'stop' means "
             "stop talking. The user can say this in ANY language."
@@ -1688,17 +1687,7 @@ class JarvisLive:
                     await asyncio.gather(_goodbye(), self._wrap_up())
                     self._stop_engines()
                     _exit_process(0)
-                # Vision: never close on a misheard word. The shutdown waits
-                # behind the on-screen CONFIRM / CANCEL banner.
-                _loop = asyncio.get_running_loop()
-
-                def _confirmed_shutdown() -> str:
-                    asyncio.run_coroutine_threadsafe(_do_shutdown(), _loop)
-                    return "Shutting down."
-
-                result = confirm_gate.request(
-                    "shutdown_assistant", "Shut down the assistant",
-                    "Close the assistant completely.", _confirmed_shutdown)
+                self._keep_task(asyncio.create_task(_do_shutdown()))
 
             elif self._action_registry.has(name):
                 # file_processor: fall back to the currently-uploaded file when none is given
