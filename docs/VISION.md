@@ -61,6 +61,23 @@ ships a pretrained "Hey Jarvis" model (`core/wake_word.py`), so a new phrase
 needs its own trained model. The assistant's displayed name is an existing
 setting and needs no code change.
 
+## Ask-first rule
+
+Vision asks before it deletes a file, sends a message or email, or installs
+software. `core/ask_first.py` decides which tool calls need this from the tool
+name and arguments, and parks them behind the on-screen CONFIRM / CANCEL banner
+(`core/confirm.py`). Nothing runs until you click CONFIRM; the banner expires
+after 90 seconds. Once confirmed, the result is passed back so Vision can tell
+you how it went.
+
+| Tool call | Needs a click |
+|---|---|
+| `file_controller` with `action=delete` | yes |
+| `send_message` (WhatsApp, Telegram, Signal, Discord, Instagram, Messenger) | yes |
+| `dev_agent` build or improve jobs (may `pip install` packages) | yes |
+| Any plugin whose name contains send, mail, message, install or delete | yes |
+| Everything else | no |
+
 ## Wayland
 
 Everything on the day-one list works on Wayland as is. Applications are

@@ -75,6 +75,7 @@ from core                     import gemini as _gemini
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
+from core                      import ask_first
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
@@ -897,12 +898,17 @@ class JarvisLive:
         parameters = parameters or {}
         try:
             if self._action_registry.has(name):
-                return self._action_registry.run(name, parameters,
-                                                 {"player": self.ui})
+                return ask_first.guard(
+                    name, parameters,
+                    lambda: self._action_registry.run(name, parameters,
+                                                      {"player": self.ui}))
             if self._plugin_registry.has(name):
-                return self._plugin_registry.run(name, parameters,
-                                                 player=self.ui,
-                                                 session_memory=None)
+                return ask_first.guard(
+                    name, parameters,
+                    lambda: self._plugin_registry.run(name, parameters,
+                                                      player=self.ui,
+                                                      session_memory=None),
+                    is_plugin=True)
         except Exception as e:
             return outcome.failed(name, f"the tool raised an error: {e}")
         return outcome.failed(name, "no tool with this name is available")
@@ -1204,6 +1210,19 @@ class JarvisLive:
         # this object — it only ever sees what this callback returns.
         return (url, key, f"{url}/auto-login?key={key}", manual,
                 getattr(self._dashboard, "_bind_error", "") or "")
+
+    def _tell_model(self, text: str) -> None:
+        """Hand the assistant a note from outside the conversation, from any
+        thread. Used to report the result of an action confirmed on screen."""
+        if not self._loop or not self.session:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text": text}]},
+                turn_complete=True
+            ),
+            self._loop
+        )
 
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
@@ -1710,7 +1729,9 @@ class JarvisLive:
                     args["mode"] = "improve"
                 _ctx = {"player": self.ui, "speak": self.speak,
                         "response": None, "session_memory": None}
-                r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
+                r = await loop.run_in_executor(None, lambda: ask_first.guard(
+                    name, args,
+                    lambda: self._action_registry.run(name, args, _ctx)))
                 result = r or "Done."
                 # web_search: mirror results to the on-screen content panel
                 if (name == "web_search" and r
@@ -1728,7 +1749,10 @@ class JarvisLive:
                 if self._plugin_registry.has(name):
                     r = await loop.run_in_executor(
                         None,
-                        lambda: self._plugin_registry.run(name, args, player=self.ui, session_memory=None)
+                        lambda: ask_first.guard(
+                            name, args,
+                            lambda: self._plugin_registry.run(name, args, player=self.ui, session_memory=None),
+                            is_plugin=True)
                     )
                     result = r or "Done."
                 else:
@@ -2693,6 +2717,9 @@ class JarvisLive:
             log  = self.ui.write_log,
         )
         set_trim_notifier(self.ui.write_log)
+        # Vision: deletes, messages and installs wait for an on-screen click.
+        # Once confirmed, the result is passed back so the assistant can say it.
+        ask_first.bind(self._tell_model)
 
         # Tell the device picker the exact rates the streams open at, from the
         # constants that actually open them — so it can never list a device that
