@@ -65,10 +65,6 @@ def _save_config_key(key: str, value) -> None:
         print(f"[Vision] ⚠️  Could not save config key '{key}': {e}")
 
 
-def _get_os() -> str:
-    return _load_config().get("os_system", "windows").lower()
-
-
 _IMG_MAX_W = 1280
 _IMG_MAX_H = 720
 _JPEG_Q    = 82
@@ -107,11 +103,6 @@ def _cv2_backend() -> int:
     """Return the best OpenCV camera backend for the current OS."""
     if not _CV2:
         return 0
-    os_name = _get_os()
-    if os_name == "windows":
-        return cv2.CAP_DSHOW
-    if os_name == "mac":
-        return cv2.CAP_AVFOUNDATION
     return cv2.CAP_ANY
 
 

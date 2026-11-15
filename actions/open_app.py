@@ -34,7 +34,6 @@ WHY IT IS NOT A LIST OF APPLICATIONS
     through untouched, which is what makes software nobody here has heard of
     work exactly as well as the software we have.
 """
-import os
 import platform
 import shutil
 import subprocess
@@ -75,10 +74,7 @@ def _desktop_search(app_name: str) -> bool:
     if not _PYAUTOGUI:
         return False
     try:
-        if _SYSTEM == "Darwin":
-            pyautogui.hotkey("command", "space")
-        else:
-            pyautogui.press("win")
+        pyautogui.press("win")
         time.sleep(_SEARCH_SETTLE)
         pyautogui.write(app_name, interval=0.05)
         time.sleep(_SEARCH_SETTLE)
@@ -87,69 +83,6 @@ def _desktop_search(app_name: str) -> bool:
     except Exception as exc:
         print(f"[open_app] desktop search failed: {exc}")
         return False
-
-
-def _launch_windows(app_name: str) -> bool:
-    """-> was a launch REQUESTED successfully. Never 'did it open'.
-
-    Three routes, none of them a shell:
-
-      1. an executable on PATH, started as a one-element argument vector. The
-         old code passed the raw string with shell=True, which is what let
-         "notepad.exe & whoami" run two things.
-      2. a URI scheme such as `ms-settings:` — handed to the OS handler with
-         os.startfile, which is what the shell would have called anyway,
-         without a command line for anything to be appended to.
-      3. the Start Menu, typed like a person would.
-    """
-    resolved = shutil.which(app_name)
-    if resolved:
-        try:
-            subprocess.Popen(
-                [resolved],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return True
-        except Exception as exc:
-            print(f"[open_app] Popen failed for {resolved!r}: {exc}")
-
-    # A scheme, not a path: "ms-settings:", "spotify:", "steam://run/...".
-    # Checked before ":" appears anywhere else — a Windows path has one too,
-    # at index 1, and that is a file, not a scheme.
-    scheme, _, rest = app_name.partition(":")
-    if rest and scheme and scheme.isalnum() and len(scheme) > 1:
-        try:
-            os.startfile(app_name)               # noqa: S606 — no shell involved
-            return True
-        except Exception as exc:
-            print(f"[open_app] startfile failed for {app_name!r}: {exc}")
-
-    return _desktop_search(app_name)
-
-
-def _launch_macos(app_name: str) -> bool:
-    for candidate in (app_name, f"{app_name}.app"):
-        try:
-            result = subprocess.run(
-                ["open", "-a", candidate], capture_output=True, timeout=8
-            )
-            if result.returncode == 0:
-                return True
-        except Exception:
-            pass
-
-    binary = shutil.which(app_name) or shutil.which(app_name.lower())
-    if binary:
-        try:
-            subprocess.Popen(
-                [binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            return True
-        except Exception:
-            pass
-
-    return _desktop_search(app_name)
 
 
 _LINUX_TERMINALS = [
@@ -217,8 +150,6 @@ def _launch_linux(app_name: str) -> bool:
 
 
 _LAUNCHERS = {
-    "Windows": _launch_windows,
-    "Darwin": _launch_macos,
     "Linux": _launch_linux,
 }
 

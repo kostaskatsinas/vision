@@ -61,7 +61,6 @@ NO LANGUAGE, ANYWHERE
 from __future__ import annotations
 
 import os
-import platform as _platform
 import re
 import threading
 import time
@@ -511,7 +510,7 @@ def drag(start: Target, end: Target, *, duration: float = 0.45) -> Act:
 #
 # The old code sent 120 everywhere, which was right on Windows and asked macOS
 # for 360 lines and X11 for 360 separate wheel clicks per notch.
-_NOTCH = {"windows": 120, "mac": 3, "linux": 1}
+_NOTCH = {"linux": 1}
 
 
 def _wheel(direction: str, notches: int) -> None:
@@ -523,13 +522,6 @@ def _wheel(direction: str, notches: int) -> None:
     amount = sign * notches * _NOTCH.get(_OS, 1)
     if not horizontal:
         pyautogui.scroll(amount)
-        return
-    if _OS == "windows":
-        # pyautogui's Windows hscroll is literally its vertical scroll, so a
-        # horizontal request scrolled the page down. MOUSEEVENTF_HWHEEL is the
-        # real horizontal wheel.
-        import ctypes
-        ctypes.WinDLL("user32").mouse_event(0x01000, 0, 0, int(amount), 0)
         return
     pyautogui.hscroll(amount)
 
@@ -579,7 +571,7 @@ def scroll(direction: str = "down", amount: int = 3, *,
 # anybody's language: "enter" is the name of a key in the library's vocabulary,
 # the same way "Button" is the name of a role in UIA's.
 # ---------------------------------------------------------------------------
-_OS = {"Windows": "windows", "Darwin": "mac"}.get(_platform.system(), "linux")
+_OS = "linux"
 
 _KEY_ALIASES = {
     "return": "enter", "cr": "enter", "newline": "enter",
@@ -616,9 +608,7 @@ def normalise_key(name: str) -> str:
         return "ctrl"
     key = _KEY_ALIASES.get(key, key)
     if key in ("ctrl", "command"):
-        return "command" if _OS == "mac" else "ctrl"
-    if key == "winleft" and _OS == "mac":
-        key = "command"
+        return "ctrl"
     return key
 
 
@@ -748,8 +738,7 @@ def _deliver_text(text: str) -> tuple[str, str]:
     if not text:
         return "nothing to type", ""
     reasons: list[str] = []
-    native = {"windows": _type_windows, "mac": _type_mac,
-              "linux": _type_linux}.get(_OS)
+    native = {"linux": _type_linux}.get(_OS)
     if native is not None:
         try:
             problem = native(text)
@@ -770,119 +759,6 @@ def _deliver_text(text: str) -> tuple[str, str]:
         pyautogui.write(text, interval=ASCII_INTERVAL)
         return "key presses (symbols may differ on non-US keyboard layouts)", ""
     return "", "; ".join(reasons)
-
-
-def _type_windows(text: str) -> Optional[str]:
-    """SendInput with KEYEVENTF_UNICODE. None on success, else why not.
-
-    Every character goes as its UTF-16 code units, so a character outside the
-    Basic Multilingual Plane (most emoji) travels as its surrogate pair, which
-    is exactly what the receiving window expects. Line breaks and tabs are sent
-    as the real Enter and Tab keys: a Unicode "\\n" is not a keystroke to most
-    applications.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    ulong_ptr = ctypes.c_size_t
-
-    class KEYBDINPUT(ctypes.Structure):
-        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
-                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
-                    ("dwExtraInfo", ulong_ptr)]
-
-    class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
-                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
-                    ("time", wintypes.DWORD), ("dwExtraInfo", ulong_ptr)]
-
-    class _UNION(ctypes.Union):
-        # MOUSEINPUT is the largest member, and the union has to be that size
-        # or SendInput rejects every record with ERROR_INVALID_PARAMETER.
-        _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT)]
-
-    class INPUT(ctypes.Structure):
-        _anonymous_ = ("u",)
-        _fields_ = [("type", wintypes.DWORD), ("u", _UNION)]
-
-    INPUT_KEYBOARD, KEYUP, UNICODE = 1, 0x0002, 0x0004
-    VK_RETURN, VK_TAB = 0x0D, 0x09
-
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
-    user32.SendInput.restype = wintypes.UINT
-
-    records: list[INPUT] = []
-
-    def key(vk: int = 0, scan: int = 0, flags: int = 0) -> None:
-        record = INPUT(type=INPUT_KEYBOARD)
-        record.ki = KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0,
-                               dwExtraInfo=0)
-        records.append(record)
-
-    for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
-        if ch == "\n" or ch == "\t":
-            vk = VK_RETURN if ch == "\n" else VK_TAB
-            key(vk=vk)
-            key(vk=vk, flags=KEYUP)
-            continue
-        data = ch.encode("utf-16-le")
-        for i in range(0, len(data), 2):
-            unit = int.from_bytes(data[i:i + 2], "little")
-            key(scan=unit, flags=UNICODE)
-            key(scan=unit, flags=UNICODE | KEYUP)
-
-    # In batches, with a breath between them: an application reading its
-    # message queue slowly drops characters from one enormous burst.
-    batch = 64
-    for start in range(0, len(records), batch):
-        chunk = records[start:start + batch]
-        array = (INPUT * len(chunk))(*chunk)
-        sent = user32.SendInput(len(chunk), array, ctypes.sizeof(INPUT))
-        if sent != len(chunk):
-            return (f"Windows accepted {sent} of {len(chunk)} input records "
-                    f"(error {ctypes.get_last_error()})")
-        time.sleep(0.01)
-    return None
-
-
-def _type_mac(text: str) -> Optional[str]:
-    """Quartz keyboard events carrying Unicode strings. None on success."""
-    import Quartz
-
-    RETURN, TAB = 36, 48          # virtual key codes; positions, not letters
-
-    def post_string(chunk: str) -> None:
-        units = len(chunk.encode("utf-16-le")) // 2
-        for down in (True, False):
-            event = Quartz.CGEventCreateKeyboardEvent(None, 0, down)
-            Quartz.CGEventKeyboardSetUnicodeString(event, units, chunk)
-            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
-        time.sleep(0.008)
-
-    def post_key(code: int) -> None:
-        for down in (True, False):
-            Quartz.CGEventPost(Quartz.kCGHIDEventTap,
-                               Quartz.CGEventCreateKeyboardEvent(None, code, down))
-        time.sleep(0.008)
-
-    # macOS reads at most 20 UTF-16 units from one event, so text goes in short
-    # runs that never split a character.
-    run = ""
-    for ch in text.replace("\r\n", "\n").replace("\r", "\n"):
-        if ch in "\n\t":
-            if run:
-                post_string(run)
-                run = ""
-            post_key(RETURN if ch == "\n" else TAB)
-            continue
-        if len((run + ch).encode("utf-16-le")) // 2 > 16:
-            post_string(run)
-            run = ""
-        run += ch
-    if run:
-        post_string(run)
-    return None
 
 
 def _type_linux(text: str) -> Optional[str]:

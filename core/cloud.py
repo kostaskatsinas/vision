@@ -2742,7 +2742,7 @@ def _as_service(dest: Path, *args: str, capture: bool = False):
 def install(port: int, host: str) -> None:
     """Safe to run again: updates the code and keeps the secret, memory,
     settings, schedule and workspace."""
-    if os.name != "posix" or os.geteuid() != 0:
+    if os.geteuid() != 0:
         raise SystemExit("Run on the server as root:  sudo python3 -m core.cloud install")
     dest = INSTALL_DIR
 

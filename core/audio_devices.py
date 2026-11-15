@@ -87,11 +87,6 @@ _chosen_api: dict = {"input": None, "output": None}
 # DirectSound for the microphone and MME for the speakers — a split that no
 # amount of reasoning would have produced.
 _PREFERRED_APIS = {
-    "Windows": ("directsound", "mme", "wasapi"),
-    # macOS has only Core Audio, so there is nothing to disambiguate.
-    "Darwin":  ("core audio",),
-    # PulseAudio/PipeWire present one clean endpoint per device; raw ALSA
-    # presents dozens of routing permutations of the same card.
     "Linux":   ("pulse", "pipewire", "jack", "alsa"),
 }
 
@@ -568,60 +563,6 @@ def _endpoint_for(name: str):
     Matching is by the name Windows itself reports, which is the same string
     sounddevice lists, folded so case and punctuation cannot separate them.
     """
-    if _platform_is() != "Windows" or not name:
-        return None
-    try:
-        from pycaw.pycaw import AudioUtilities
-        wanted = _fold(name)
-        if not wanted:
-            return None
-
-        # Collect first, decide after. An earlier version returned the first
-        # candidate that matched on a PREFIX, which meant a loosely-similar
-        # name could win over the exact one simply by coming first in the
-        # enumeration — and the slider then moved a device the user had not
-        # chosen. Exact wins, always; the prefix pass exists only because MME
-        # truncates long names to 31 characters.
-        exact, partial = None, None
-        for dev in AudioUtilities.GetAllDevices():
-            # ONLY ACTIVE ENDPOINTS, AND THIS IS NOT A TIDINESS FILTER.
-            #
-            # Windows keeps a record of hardware that is no longer here, and it
-            # keeps the SAME FRIENDLY NAME. Measured on this machine, two
-            # devices answered to "Hoparlör (Realtek(R) Audio)": one
-            # NotPresent sitting at 100%, and the real one, Active, at 10%.
-            # Matching by name alone returned whichever came first — so the
-            # panel read 100% for a speaker that was actually at 10%, and
-            # setting it moved a device that does not exist.
-            try:
-                if str(getattr(dev, "state", "")) != "AudioDeviceState.Active":
-                    continue
-            except Exception:
-                continue
-            try:
-                # Reading this property activates a COM interface and raises
-                # for devices that are unplugged or disabled — normal, and not
-                # worth a line in the log for each one.
-                endpoint = dev.EndpointVolume
-            except Exception:
-                continue
-            if endpoint is None:
-                continue
-            try:
-                friendly = _fold(getattr(dev, "FriendlyName", "") or "")
-            except Exception:
-                continue
-            if not friendly:
-                continue
-            if friendly == wanted:
-                exact = endpoint
-                break
-            if partial is None and (friendly.startswith(wanted[:24])
-                                    or wanted.startswith(friendly[:24])):
-                partial = endpoint
-        return exact or partial
-    except Exception as e:
-        print(f"[Audio] per-device volume unavailable: {e}")
     return None
 
 

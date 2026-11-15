@@ -36,7 +36,6 @@ from PyQt6.QtWidgets import (
 from gui.theme import (
     C,
     DEFAULT_UI_COLOR,
-    _OS,
     qcol,
 )
 
@@ -57,9 +56,7 @@ class SetupOverlay(QWidget):
             }}
         """)
 
-        detected = {"darwin": "mac", "windows": "windows"}.get(
-            _OS.lower(), "linux"
-        )
+        detected = "linux"
         self._sel_os = detected
 
         layout = QVBoxLayout(self)
@@ -106,13 +103,13 @@ class SetupOverlay(QWidget):
 
         layout.addWidget(_lbl("OPERATING SYSTEM", 8, color=C.TEXT_DIM,
                                align=Qt.AlignmentFlag.AlignLeft))
-        det_name = {"windows": "Windows", "mac": "macOS", "linux": "Linux"}[detected]
+        det_name = "Linux"
         layout.addWidget(_lbl(f"Auto-detected: {det_name}", 8, color=C.ACC2,
                                align=Qt.AlignmentFlag.AlignLeft))
 
         os_row = QHBoxLayout(); os_row.setSpacing(6)
         self._os_btns: dict[str, QPushButton] = {}
-        for key, label in [("windows","⊞  Windows"),("mac","  macOS"),("linux","🐧  Linux")]:
+        for key, label in [("linux","🐧  Linux")]:
             btn = QPushButton(label)
             btn.setFont(hud_font(9, QFont.Weight.Bold))
             btn.setFixedHeight(32)
@@ -158,7 +155,7 @@ class SetupOverlay(QWidget):
 
     def _sel(self, key: str):
         self._sel_os = key
-        pal = {"windows":(C.PRI,"#001a22"),"mac":(C.ACC2,"#1a1400"),"linux":(C.GREEN,"#001a0d")}
+        pal = {"linux":(C.GREEN,"#001a0d")}
         for k, btn in self._os_btns.items():
             if k == key:
                 fg, bg = pal[k]

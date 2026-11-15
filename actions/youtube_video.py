@@ -33,7 +33,7 @@ try:
 except ImportError:
     _TRANSCRIPT_OK = False
 
-from config import get_os, is_windows, is_mac, is_linux
+from config import get_os
 
 
 def _get_base_dir() -> Path:
@@ -64,12 +64,7 @@ def _get_api_key() -> str:
 
 def _open_url(url: str) -> None:
     try:
-        if is_mac():
-            subprocess.Popen(["open", url])
-        elif is_linux():
-            subprocess.Popen(["xdg-open", url])
-        else:
-            subprocess.Popen(["cmd", "/c", "start", "", url], shell=False)
+        subprocess.Popen(["xdg-open", url])
     except Exception as e:
         print(f"[YouTube] ⚠️ open_url failed: {e}")
 
@@ -210,12 +205,7 @@ def _save_summary(content: str, video_url: str) -> str:
     filepath.write_text(header + content, encoding="utf-8")
 
     try:
-        if is_windows():
-            subprocess.Popen(["notepad.exe", str(filepath)])
-        elif is_mac():
-            subprocess.Popen(["open", "-t", str(filepath)])
-        else:
-            subprocess.Popen(["xdg-open", str(filepath)])
+        subprocess.Popen(["xdg-open", str(filepath)])
     except Exception as e:
         print(f"[YouTube] ⚠️ Could not open text editor: {e}")
 

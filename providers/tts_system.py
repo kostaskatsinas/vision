@@ -82,7 +82,7 @@ _SYS = platform.system()
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|(?<=[。！？؟۔।])\s*")
 
 # Windows only: keep a console window from flashing open on every sentence.
-_NO_WINDOW = 0x08000000 if _SYS == "Windows" else 0
+_NO_WINDOW = 0
 
 
 def _run(args: list[str], timeout: float = 60.0,
@@ -164,27 +164,6 @@ def list_voices(refresh: bool = False) -> list[str]:
 
 def _read_voices() -> list[str]:
     try:
-        if _SYS == "Windows":
-            ps = _powershell()
-            if not ps:
-                return []
-            out = _run([ps, "-NoProfile", "-NonInteractive", "-Command",
-                        "Add-Type -AssemblyName System.Speech; "
-                        "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
-                        ".GetInstalledVoices() | "
-                        "ForEach-Object { $_.VoiceInfo.Name }"], timeout=20)
-            return [l.strip() for l in
-                    out.stdout.decode("utf-8", "replace").splitlines() if l.strip()]
-
-        if _SYS == "Darwin":
-            out = _run(["say", "-v", "?"], timeout=20)
-            names = []
-            for line in out.stdout.decode("utf-8", "replace").splitlines():
-                # "Alice               it_IT    # Salve, mi chiamo Alice"
-                name = line.split("  ")[0].strip()
-                if name:
-                    names.append(name)
-            return names
 
         # Linux
         if shutil.which("espeak-ng") or shutil.which("espeak"):
@@ -202,10 +181,6 @@ def _read_voices() -> list[str]:
 
 
 def engine_name() -> str:
-    if _SYS == "Windows":
-        return "System.Speech (SAPI5)" if _powershell() else ""
-    if _SYS == "Darwin":
-        return "say" if shutil.which("say") else ""
     for exe in ("espeak-ng", "espeak", "spd-say"):
         if shutil.which(exe):
             return exe
@@ -222,50 +197,6 @@ class SystemTTS:
         self.caps = dict(DEFAULT_CAPS)
         self.caps["audio_out"] = True
         self._engine = engine_name()
-
-    # -- per platform, all returning a WAV file's bytes ----------------------
-    def _windows(self, text_file: str, wav_file: str) -> None:
-        ps = _powershell()
-        if not ps:
-            raise RuntimeError("PowerShell was not found")
-        # The text is READ FROM A UTF-8 FILE, never interpolated into this
-        # script — see the module docstring. The voice name is the only thing
-        # substituted, and it is quoted and doubled so a name with an
-        # apostrophe cannot end the string early.
-        voice = self.voice.replace("'", "''")
-        select = (f"$s.SelectVoice('{voice}');" if self.voice else "")
-        script = (
-            "Add-Type -AssemblyName System.Speech;"
-            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-            f"{select}"
-            f"$s.Rate = {max(-10, min(10, self.rate))};"
-            f"$t = [System.IO.File]::ReadAllText('{text_file}',"
-            " [System.Text.Encoding]::UTF8);"
-            f"$s.SetOutputToWaveFile('{wav_file}');"
-            "$s.Speak($t);"
-            "$s.Dispose();"
-        )
-        r = _run([ps, "-NoProfile", "-NonInteractive", "-Command", script])
-        if r.returncode != 0:
-            raise RuntimeError(r.stderr.decode("utf-8", "replace")[:200]
-                               or "the speech engine failed")
-
-    def _macos(self, text_file: str, wav_file: str) -> None:
-        args = ["say", "-f", text_file, "-o", wav_file,
-                # Ask for exactly what the speaker wants, so nothing is
-                # resampled on the way out.
-                "--data-format=LEI16@24000"]
-        if self.voice:
-            args[1:1] = ["-v", self.voice]
-        if self.rate:
-            # `say` takes words per minute; 175 is its default, and the -10..10
-            # scale is mapped onto it so one setting means the same thing on
-            # every platform.
-            args[1:1] = ["-r", str(max(90, min(400, 175 + self.rate * 15)))]
-        r = _run(args)
-        if r.returncode != 0:
-            raise RuntimeError(r.stderr.decode("utf-8", "replace")[:200]
-                               or "`say` failed")
 
     def _linux(self, text_file: str, wav_file: str) -> None:
         exe = shutil.which("espeak-ng") or shutil.which("espeak")
@@ -295,12 +226,7 @@ class SystemTTS:
         try:
             with open(txt, "w", encoding="utf-8") as f:
                 f.write(text)
-            if _SYS == "Windows":
-                self._windows(txt, wav)
-            elif _SYS == "Darwin":
-                self._macos(txt, wav)
-            else:
-                self._linux(txt, wav)
+            self._linux(txt, wav)
             with open(wav, "rb") as f:
                 return f.read()
         finally:
@@ -344,9 +270,7 @@ class SystemTTS:
 
     def probe(self) -> tuple[bool, str]:
         if not self._engine:
-            if _SYS == "Linux":
-                return False, "No speech engine — install espeak-ng."
-            return False, "No speech engine was found on this system."
+            return False, "No speech engine — install espeak-ng."
         try:
             wav = self._synth_blocking("ok")
             pcm = audio.wav_to_pcm(wav, audio.SPEAKER_RATE)

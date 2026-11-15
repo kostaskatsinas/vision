@@ -35,9 +35,7 @@ from PyQt6.QtWidgets import (
 
 from gui.theme import (
     C,
-    _OS,
-    qcol,
-)
+    qcol)
 
 from collections import deque
 
@@ -462,7 +460,7 @@ class _DropCanvas(QWidget):
             n = self._z._folder_files
             ext_str, size_str = "FOLDER", f"{n}{'+' if n >= 5000 else ''} files"
 
-        p.setFont(QFont("Segoe UI Emoji", 13) if _OS == "Windows" else QFont("Arial", 13))
+        p.setFont(QFont("Arial", 13))
         p.setPen(QPen(qcol(icon_col)))
         p.drawText(QRectF(8, 0, 26, H), Qt.AlignmentFlag.AlignCenter, icon)
 

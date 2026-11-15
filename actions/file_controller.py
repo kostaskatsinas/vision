@@ -73,19 +73,6 @@ def _restore_from_trash(original: Path) -> str:
     back out again is shell work and only reliable on Windows, where pywin32 is
     already a dependency. Everywhere else this says where the file is instead of
     pretending it failed — the file is not lost either way."""
-    if _OS == "Windows":
-        try:
-            import win32com.client
-            shell = win32com.client.Dispatch("Shell.Application")
-            bin_folder = shell.NameSpace(10)      # ssfBITBUCKET
-            for item in bin_folder.Items():
-                if str(bin_folder.GetDetailsOf(item, 1)).strip().lower() == \
-                        str(original.parent).strip().lower():
-                    if str(item.Name).strip().lower() == original.name.strip().lower():
-                        item.InvokeVerb("UNDELETE")
-                        return f"'{original.name}' restored from the Recycle Bin."
-        except Exception as e:
-            print(f"[file] Recycle Bin restore failed: {e}")
     return (f"'{original.name}' is in the Recycle Bin — I could not pull it back "
             f"automatically, but it is there and can be restored by hand.")
 
@@ -106,45 +93,39 @@ def _is_safe_path(target: Path) -> bool:
         return False
 
 def _get_desktop() -> Path:
-    if _OS == "Linux":
-        xdg = os.environ.get("XDG_DESKTOP_DIR", "")
-        if xdg and Path(xdg).exists():
-            return Path(xdg)
+    xdg = os.environ.get("XDG_DESKTOP_DIR", "")
+    if xdg and Path(xdg).exists():
+        return Path(xdg)
     return Path.home() / "Desktop"
 
 def _get_downloads() -> Path:
-    if _OS == "Linux":
-        xdg = os.environ.get("XDG_DOWNLOAD_DIR", "")
-        if xdg and Path(xdg).exists():
-            return Path(xdg)
+    xdg = os.environ.get("XDG_DOWNLOAD_DIR", "")
+    if xdg and Path(xdg).exists():
+        return Path(xdg)
     return Path.home() / "Downloads"
 
 def _get_documents() -> Path:
-    if _OS == "Linux":
-        xdg = os.environ.get("XDG_DOCUMENTS_DIR", "")
-        if xdg and Path(xdg).exists():
-            return Path(xdg)
+    xdg = os.environ.get("XDG_DOCUMENTS_DIR", "")
+    if xdg and Path(xdg).exists():
+        return Path(xdg)
     return Path.home() / "Documents"
 
 def _get_pictures() -> Path:
-    if _OS == "Linux":
-        xdg = os.environ.get("XDG_PICTURES_DIR", "")
-        if xdg and Path(xdg).exists():
-            return Path(xdg)
+    xdg = os.environ.get("XDG_PICTURES_DIR", "")
+    if xdg and Path(xdg).exists():
+        return Path(xdg)
     return Path.home() / "Pictures"
 
 def _get_music() -> Path:
-    if _OS == "Linux":
-        xdg = os.environ.get("XDG_MUSIC_DIR", "")
-        if xdg and Path(xdg).exists():
-            return Path(xdg)
+    xdg = os.environ.get("XDG_MUSIC_DIR", "")
+    if xdg and Path(xdg).exists():
+        return Path(xdg)
     return Path.home() / "Music"
 
 def _get_videos() -> Path:
-    if _OS == "Linux":
-        xdg = os.environ.get("XDG_VIDEOS_DIR", "")
-        if xdg and Path(xdg).exists():
-            return Path(xdg)
+    xdg = os.environ.get("XDG_VIDEOS_DIR", "")
+    if xdg and Path(xdg).exists():
+        return Path(xdg)
     return Path.home() / "Videos"
 
 

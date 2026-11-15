@@ -101,8 +101,6 @@ def ensure_ollama_running(timeout: int = 15) -> bool:
     print("[LLM] Ollama not running — launching 'ollama serve'…")
     try:
         kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         subprocess.Popen(["ollama", "serve"], **kwargs)
     except FileNotFoundError:
         print("[LLM] 'ollama' command not found. Install Ollama from https://ollama.com")

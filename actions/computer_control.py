@@ -1,16 +1,10 @@
 #computer_control.py
 import io
 import json
-import platform
 import re
 import string
 import subprocess
 import sys
-
-if platform.system() == "Windows":
-    _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
-else:
-    _WIN_HIDE: dict = {}
 import time
 import random
 from pathlib import Path
@@ -51,9 +45,7 @@ def _load_config() -> dict:
         return {}
 
 def _platform_os() -> str:
-    return {"Windows": "windows", "Darwin": "mac", "Linux": "linux"}.get(
-        platform.system(), "linux"
-    )
+    return "linux"
 
 def _get_os() -> str:
     return _load_config().get("os_system", _platform_os()).lower()
@@ -189,7 +181,7 @@ def _smart_type(text: str, clear_first: bool = True) -> str:
     if len(text) > 20 and _require_pyperclip():
         pyperclip.copy(text)
         time.sleep(0.1)
-        paste_key = "command" if _get_os() == "mac" else "ctrl"
+        paste_key = "ctrl"
         pyautogui.hotkey(paste_key, "v")
         return f"Smart-typed (clipboard): {text[:60]}{'…' if len(text) > 60 else ''}"
 
@@ -224,7 +216,7 @@ def _scroll(direction: str = "down", amount: int = 3) -> str:
     amount     = max(1, min(60, abs(int(amount))))
     # `amount` is wheel notches. pyautogui counts 1/120 of a notch on Windows and
     # whole notches elsewhere, so "scroll 3" moved the page by nothing on Windows.
-    units      = amount * 120 if sys.platform == "win32" else amount
+    units      = amount
     clicks     = units if direction in ("up", "right") else -units
     pyautogui.scroll(clicks) if vertical else pyautogui.hscroll(clicks)
     return f"Scrolled {direction} ×{amount}"
@@ -256,7 +248,7 @@ def _clipboard_paste(text: str) -> str:
         pyperclip.copy(text)
         time.sleep(0.1)
         _require_pyautogui()
-        paste_key = "command" if _get_os() == "mac" else "ctrl"
+        paste_key = "ctrl"
         pyautogui.hotkey(paste_key, "v")
         return f"Pasted: {text[:60]}{'…' if len(text) > 60 else ''}"
     return "pyperclip not available"
@@ -272,7 +264,7 @@ def _screenshot(save_path: str | None = None) -> str:
 
 def _clear_field() -> str:
     _require_pyautogui()
-    select_key = "command" if _get_os() == "mac" else "ctrl"
+    select_key = "ctrl"
     pyautogui.hotkey(select_key, "a")
     time.sleep(0.1)
     pyautogui.press("delete")
@@ -281,55 +273,27 @@ def _clear_field() -> str:
 def _focus_window(title: str) -> str:
     os_name = _get_os()
 
-    if os_name == "windows":
-        try:
-            script = f'(New-Object -ComObject WScript.Shell).AppActivate("{title}")'
-            subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                capture_output=True, timeout=5, **_WIN_HIDE,
-            )
-            time.sleep(0.3)
-            return f"Focused window: {title}"
-        except Exception as e:
-            return f"focus_window (Windows) failed: {e}"
-
-    if os_name == "mac":
-        script = (
-            f'tell application "System Events" to '
-            f'set frontmost of (first process whose name contains "{title}") to true'
+    try:
+        result = subprocess.run(
+            ["wmctrl", "-a", title],
+            capture_output=True, timeout=5,
         )
-        try:
-            subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True, timeout=5,
-            )
+        if result.returncode == 0:
             time.sleep(0.3)
             return f"Focused window: {title}"
-        except Exception as e:
-            return f"focus_window (macOS) failed: {e}"
-
-    if os_name == "linux":
-        try:
-            result = subprocess.run(
-                ["wmctrl", "-a", title],
-                capture_output=True, timeout=5,
-            )
-            if result.returncode == 0:
-                time.sleep(0.3)
-                return f"Focused window: {title}"
-        except FileNotFoundError:
-            pass
-        try:
-            result = subprocess.run(
-                ["xdotool", "search", "--name", title, "windowactivate"],
-                capture_output=True, timeout=5,
-            )
-            time.sleep(0.3)
-            return f"Focused window: {title}"
-        except FileNotFoundError:
-            return "focus_window (Linux) requires wmctrl or xdotool"
-        except Exception as e:
-            return f"focus_window (Linux) failed: {e}"
+    except FileNotFoundError:
+        pass
+    try:
+        result = subprocess.run(
+            ["xdotool", "search", "--name", title, "windowactivate"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(0.3)
+        return f"Focused window: {title}"
+    except FileNotFoundError:
+        return "focus_window (Linux) requires wmctrl or xdotool"
+    except Exception as e:
+        return f"focus_window (Linux) failed: {e}"
 
     return f"focus_window: unknown OS '{os_name}'"
 
