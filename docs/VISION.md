@@ -215,7 +215,10 @@ What a helper is allowed to do is set by the flags Vision starts it with:
 | write (after CONFIRM) | the same plus `Write, Edit`, with `acceptEdits` | `--approval-mode auto_edit` |
 
 Neither level allows shell commands, so a helper cannot delete files, install
-software or send anything. A write job is refused for your home folder itself,
+software or send anything. Claude Code runs with `--restricted`, which holds it
+to the folder you named: checked on the target machine, it could neither read
+nor write a neighbouring folder. Gemini CLI could not be checked there (its
+sign-in fails), so treat it as untested until it is. A write job is refused for your home folder itself,
 `~/.config`, `~/.ssh` and `~/.vision`. Jobs stop after 15 minutes unless you
 give another limit (at most 60), and two can run at once.
 

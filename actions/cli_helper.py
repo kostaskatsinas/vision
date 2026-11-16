@@ -16,7 +16,8 @@ helper, not by its good behaviour:
            folder.
 
 Neither level lets a helper run shell commands, so it cannot delete files,
-install software or send anything. The answer is treated as outside data
+install software or send anything. Claude Code is also held to the working
+folder: it cannot read or write files outside it. The answer is treated as outside data
 (core/outcome.untrusted): a helper reads the web, so its text may carry
 someone else's instructions.
 
@@ -61,8 +62,11 @@ def _command(helper: str, level: str) -> list[str]:
         tools = read + ",Write,Edit" if level == "write" else read
         # --tools is the set that exists for this run at all; --allowedTools
         # lets those run without a prompt nobody is there to answer.
+        # --restricted confines the file tools to the working folder (checked
+        # on the target machine: without it a job could read and write a
+        # sibling folder) and ignores the user's own Claude Code settings.
         cmd = ["claude", "-p", "--output-format", "text", "--no-session-persistence",
-               "--tools", tools, "--allowedTools", tools,
+               "--restricted", "--tools", tools, "--allowedTools", tools,
                "--disallowedTools", "Bash" if level == "write" else "Bash,Write,Edit,NotebookEdit"]
         if level == "write":
             cmd += ["--permission-mode", "acceptEdits"]

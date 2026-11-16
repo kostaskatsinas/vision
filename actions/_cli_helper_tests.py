@@ -93,6 +93,7 @@ def main() -> int:
         check("claude chosen first", call[0] == "claude")
         check("task goes in on stdin, not as an argument", call[3] == "--help explain X"
               and "--help explain X" not in call[1], str(call[1]))
+        check("held to the working folder", "--restricted" in call[1], str(call[1]))
         check("read level: only reading tools exist", call[1][call[1].index("--tools") + 1]
               == "Read,Glob,Grep,WebSearch,WebFetch")
         check("read level: no edit tools, no shell", "Write" not in call[1][call[1].index("--allowedTools") + 1]
