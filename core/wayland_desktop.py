@@ -485,7 +485,7 @@ def _parse_gnome_display_config(body: tuple) -> dict[tuple[int, int], dict]:
 
     for mon_entry in (raw_monitors or ()):
         try:
-            spec, _modes, props = mon_entry[0], mon_entry[1], mon_entry[2]
+            spec, props = mon_entry[0], mon_entry[2]
             connector = str(spec[0])
             vendor = str(spec[1]) if len(spec) > 1 else ""
             product = str(spec[2]) if len(spec) > 2 else ""
@@ -1006,13 +1006,6 @@ def parse_gtk_accelerator(accel: str) -> tuple[str, ...]:
     return tuple(mods + [key_name])
 
 
-def _default_monitor(mons: list[dict]) -> dict:
-    primary = next((m for m in mons if m.get("primary")), None)
-    if primary is not None:
-        return primary
-    return max(mons, key=lambda m: m["width"] * m["height"])
-
-
 def _mon_pos(m: dict) -> tuple[int, int]:
     return (int(m["left"]), int(m["top"]))
 
@@ -1129,7 +1122,7 @@ def move_window_to_monitor(which: Any, from_monitor: Any = None) -> dict:
     `'left'`, `'right'`, `'top'`, `'main'`) using GNOME's monitor movement
     shortcuts along the monitor layout graph, and place the pointer on that
     monitor."""
-    global _monitor_key, _last_pos
+    global _monitor_key
     mons = monitors()
     target = resolve_monitor(which, mons)
     if from_monitor is not None:
@@ -1137,14 +1130,12 @@ def move_window_to_monitor(which: Any, from_monitor: Any = None) -> dict:
     else:
         source = _working(mons)
 
+    # Wayland does not tell us which monitor the focused window is on, so the
+    # source is the caller's best knowledge (the working monitor by default).
+    # When that already is the target, nothing is pressed: guessing another
+    # source here used to push a window that was already in place onto the
+    # next monitor.
     steps = monitor_path(source, target, mons)
-    if not steps and from_monitor is None:
-        # If the caller had already switched `_monitor_key` to `target` before
-        # an app window appeared on the primary/default monitor, compute the
-        # path from the primary/default monitor to `target`.
-        default_mon = _default_monitor(mons)
-        if _mon_pos(default_mon) != _mon_pos(target):
-            steps = monitor_path(default_mon, target, mons)
 
     for i, step in enumerate(steps):
         hotkey(*_wm_monitor_move_hotkey(step))

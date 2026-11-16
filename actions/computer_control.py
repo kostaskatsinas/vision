@@ -404,9 +404,15 @@ def _stop_app(app_name: str, confirmed_index: int | None = None,
     if force:
         stopped, still_open, reason = appidentity.kill_app_processes(group)
     else:
+        # close_app asks politely and never escalates: an app showing "save
+        # changes?" must not be killed under the user. kill_app is the explicit
+        # way to force it.
         stopped, still_open, reason = appidentity.close_app_processes(
-            group, force_after=True
+            group, force_after=False
         )
+        if still_open and stopped == 0:
+            reason = (reason + " - if the user wants it forced, use kill_app "
+                      "(unsaved work in it is lost)")
 
     result_key = "killed" if force else "closed"
     if stopped and not still_open:
@@ -442,29 +448,35 @@ def _kill_app(app_name: str, confirmed_index: int | None = None) -> str:
     return _stop_app(app_name, confirmed_index=confirmed_index, force=True)
 
 
-def _focus_app_if_named(app_name: str) -> str | None:
+def _focus_app_if_named(app_name: str) -> tuple[str | None, str]:
     """If `app_name` is given, bring that running application's window to the
-    front before sending window-management or tiling shortcuts."""
+    front before sending window-management or tiling shortcuts.
+
+    -> (label or None, error). An empty error with no label means no app was
+    named. A non-empty error means the app could not be focused, and the caller
+    must NOT send the shortcut: it would move whatever window has focus, which
+    is often the assistant's own.
+    """
     app_name = (app_name or "").strip()
     if not app_name:
-        return None
-    for candidate in appidentity.running(app_name, include_self=True)[:8]:
+        return None, ""
+    candidates = appidentity.running(app_name)      # never the assistant
+    if not candidates:
+        return None, (f"no running application matches '{app_name}' - open it "
+                      "first with open_app")
+    for candidate in candidates[:8]:
         if appidentity.focus(candidate):
             time.sleep(0.2)
-            return candidate.label
-    # Fallback to gtk-launch for single-instance desktop apps on GNOME Wayland,
-    # or wmctrl/xdotool by title.
-    launcher = appidentity.launcher_name(app_name)
-    for name in (launcher.lower(), app_name.lower(), app_name.lower().replace(" ", "-")):
-        try:
-            r = subprocess.run(["gtk-launch", name], capture_output=True, timeout=3)
-            if r.returncode == 0:
-                time.sleep(0.3)
-                return app_name
-        except Exception:
-            break
-    _focus_window(app_name)
-    return app_name
+            return candidate.label, ""
+    return None, (f"'{candidates[0].label}' is running but its window could not "
+                  "be brought to the front, so nothing was moved")
+
+
+def _int_param(value, default: int = 1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _tiling_shell(
@@ -477,7 +489,9 @@ def _tiling_shell(
     """Move, tile, span, center, untile or move a window across monitors using
     GNOME Tiling Shell (`tilingshell@ferrarodomenico.com`) and GNOME monitor
     shortcuts."""
-    focused = _focus_app_if_named(app_name)
+    focused, focus_error = _focus_app_if_named(app_name)
+    if focus_error:
+        return outcome.failed("tiling_shell", focus_error, app=app_name)
     if _on_wayland():
         from core import wayland_desktop
         info = wayland_desktop.tiling_shell_action(
@@ -493,7 +507,7 @@ def _tiling_shell(
             direction=direction or None,
             monitor=info.get("monitor") or (monitor or None),
             steps=info.get("steps"),
-            verified=True,
+            verified=False,
         )
 
     # Non-Wayland fallback via pyautogui hotkeys
@@ -523,6 +537,7 @@ def _tiling_shell(
         app=focused or (app_name or None),
         direction=direction or None,
         monitor=monitor or None,
+        verified=False,
     )
 
 
@@ -823,7 +838,7 @@ def computer_control(
                 direction=str(params.get("direction") or ""),
                 monitor=str(target_mon),
                 app_name=str(params.get("app_name") or params.get("title") or ""),
-                steps=int(params.get("amount") or 1),
+                steps=_int_param(params.get("amount"), 1),
             )
 
         if action in (
@@ -847,7 +862,7 @@ def computer_control(
                 direction=str(params.get("direction") or params.get("text") or ""),
                 monitor=str(target_mon),
                 app_name=str(params.get("app_name") or params.get("title") or ""),
-                steps=int(params.get("amount") or 1),
+                steps=_int_param(params.get("amount"), 1),
             )
 
         if action == "random_data":
@@ -881,8 +896,10 @@ TOOL = {
         "and MOVE / TILE windows with GNOME Tiling Shell or across monitors. "
         "Use action='kill_app' or action='close_app' with 'app_name' whenever "
         "the user asks to kill, close, quit or exit a program ('kill Spotify', "
-        "'close Chrome') - both find the application in the process table and "
-        "terminate/kill all processes belonging to that app. Always name the "
+        "'close Chrome'). close_app asks the app and all its processes to quit "
+        "and never forces it, so an app asking to save changes stays open; "
+        "kill_app force-kills every process of the app at once (unsaved work is "
+        "lost), so use it only when the user says kill or force. Always name the "
         "application in 'app_name'. "
         "To move or tile windows with Tiling Shell, use action='tile_window' "
         "(with direction='left'|'right'|'up'|'down'|'center'), "
@@ -914,7 +931,7 @@ TOOL = {
     # budget - Gemini still gets the full text. See providers/schema.py.
     "brief": (
         "Controls the computer: type, click, hotkeys, scroll, screenshots, "
-        "close_app / kill_app to kill all processes of a named application "
+        "close_app (asks to quit) / kill_app (forces) for a named application "
         "('app_name'), tile_window / span_window / untile_window / "
         "move_window_to_monitor to tile and move windows across monitors. "
         "Use open_app to open an app (with optional 'monitor')."

@@ -530,6 +530,76 @@ def test_open_app_and_kill_app() -> None:
         os.environ.pop("XDG_SESSION_TYPE", None)
 
 
+def test_window_actions_are_safe() -> None:
+    import subprocess
+    import time
+    from core import appidentity
+    from actions import computer_control as cc
+
+    portal = _fresh()
+    os.environ["XDG_SESSION_TYPE"] = "wayland"
+    real_running, real_focus = appidentity.running, appidentity.focus
+    try:
+        # A named app that is not running: nothing is pressed, and it says so.
+        appidentity.running = lambda spoken, include_self=False: []
+        portal.log.clear()
+        out = cc.computer_control({"action": "tile_window", "direction": "left",
+                                   "app_name": "Spotify"})
+        check("tiling a named app that is not running fails and presses nothing",
+              "status=failed" in out and not any(e[0] == "keycode" for e in portal.log),
+              out + str(portal.log))
+
+        # Running but its window cannot be focused: same, never the focused window.
+        fake = appidentity.Match(pid=999992, name="spotify", score=100, is_self=False)
+        seen_self = []
+        def running(spoken, include_self=False):
+            seen_self.append(include_self)
+            return [fake]
+        appidentity.running = running
+        appidentity.focus = lambda m: False
+        portal.log.clear()
+        out = cc.computer_control({"action": "move_window_to_monitor", "monitor": "1",
+                                   "app_name": "Spotify"})
+        check("an app whose window cannot be focused is not moved",
+              "status=failed" in out and not any(e[0] == "keycode" for e in portal.log),
+              out + str(portal.log))
+        check("focusing a named app never considers the assistant itself",
+              seen_self and not any(seen_self), str(seen_self))
+        appidentity.running, appidentity.focus = real_running, real_focus
+
+        # Window actions are not checked afterwards, so they are not "verified".
+        out = cc.computer_control({"action": "tile_window", "direction": "right",
+                                   "amount": "two"})
+        check("a non-number amount does not crash and nothing claims verified",
+              "status=done" in out and "verified=True" not in out, out)
+
+        # Already on the target monitor: no keys, so the window stays put.
+        wd.use_monitor(3)
+        portal.log.clear()
+        res = wd.move_window_to_monitor(3)
+        check("moving to the monitor it is already on presses nothing",
+              res["steps"] == [] and not any(e[0] == "keycode" for e in portal.log),
+              str(res) + str(portal.log))
+
+        # close_app never escalates to a kill; kill_app does.
+        sleep_bin = "/bin/sleep" if os.path.exists("/bin/sleep") else "/usr/bin/sleep"
+        if os.path.exists(sleep_bin):
+            stubborn = subprocess.Popen(
+                ["/bin/sh", "-c", f"trap '' TERM; exec {sleep_bin} 61"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.3)
+            out = cc.computer_control({"action": "close_app", "app_name": "sleep"})
+            alive = stubborn.poll() is None
+            check("close_app leaves an app that will not quit running (no SIGKILL)",
+                  alive and "status=done" not in out and "kill_app" in out, out)
+            out = cc.computer_control({"action": "kill_app", "app_name": "sleep"})
+            stubborn.wait(timeout=3)
+            check("kill_app force-kills it", "status=done" in out, out)
+    finally:
+        appidentity.running, appidentity.focus = real_running, real_focus
+        os.environ.pop("XDG_SESSION_TYPE", None)
+
+
 def main() -> int:
     wd.IDLE_CLOSE_S = 3600
     wd.missing = lambda: []             # the recorder needs neither package
@@ -546,6 +616,7 @@ def main() -> int:
         test_monitor_path_and_window_movement,
         test_tiling_shell,
         test_open_app_and_kill_app,
+        test_window_actions_are_safe,
     ):
         test()
     wd.release()
