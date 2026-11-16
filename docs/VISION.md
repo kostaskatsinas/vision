@@ -12,8 +12,9 @@ machine. The upstream documentation is in [`readme.md`](../readme.md).
 
 ## Status
 
-Planning is done and no fork-specific code has been written yet. The steps
-below are the agreed order of work.
+Steps 1 to 4 of the plan below are done: Vision runs on the target machine,
+asks before risky actions, reads and writes Google Calendar, and sees, clicks
+and types on Wayland. Step 5 (other models) is next.
 
 ## Target machine
 
@@ -50,7 +51,8 @@ it does any of these:
    (`core/confirm.py`) covers shutdown, restart and WiFi. File deletes go to the
    trash with undo. Extend the gate so the three actions above always wait for
    the user.
-3. **Add Google Calendar** as a plugin for reading and creating events.
+3. **Add Google Calendar** for reading, creating, moving and deleting events
+   (see below).
 4. **Add a Wayland backend** for typing, clicking and seeing the screen (see
    below).
 5. **Add the other models:** a local model for offline use, and Claude Code and
@@ -78,8 +80,60 @@ you how it went.
 | `file_controller` with `action=delete` | yes |
 | `send_message` (WhatsApp, Telegram, Signal, Discord, Instagram, Messenger) | yes |
 | `dev_agent` build or improve jobs (may `pip install` packages) | yes |
+| `google_calendar` with `action=delete` | yes, and the banner names the event |
+| `google_calendar` creating an event with attendees (Google emails them) | yes |
 | Any plugin whose name contains send, mail, message, install or delete | yes |
 | Everything else | no |
+
+## Google Calendar
+
+`actions/google_calendar.py` talks to the Google Calendar API with your own
+Google sign-in key, so your calendar goes only between this PC and Google.
+
+| Say | What happens |
+|---|---|
+| "What's on today?" / "What do I have this week?" | Lists events from all the calendars you show in Google Calendar, numbered |
+| "When is my dentist appointment?" | Searches the next 90 days |
+| "Add lunch with Maria tomorrow at 2" | Creates a one-hour event in your main calendar and mentions any overlap |
+| "Remind me on my phone an hour before" | Adds a Google reminder (`reminder_minutes`) to the event |
+| "Move number 2 to Friday at 10" | Moves it and keeps its length; guests are not emailed |
+| "Delete the dentist" | Shows the confirm banner with the exact event first |
+| "Invite anna@example.com" | Shows the confirm banner first, because Google emails the invitation |
+
+The `reminder` tool still sets quick reminders on this PC only (a desktop
+notification, also spoken). Calendar reminders come from Google, so they reach
+your phone.
+
+**One-time setup** (about 10 minutes, in the browser):
+
+1. Open [console.cloud.google.com](https://console.cloud.google.com/), sign in
+   with the Google account whose calendar Vision should use, and create a
+   project called `Vision`.
+2. Open the [Google Calendar API page](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com)
+   for that project and click **Enable**.
+3. Open **Google Auth Platform** (search for it at the top) and click **Get
+   started**. App name `Vision`, your email as the support and contact email,
+   audience **External**. Agree and create.
+4. In **Audience**, click **Publish app** and confirm. Without this, Google
+   ends the sign-in every 7 days. Nobody else can use it unless you give
+   them the file from the next step.
+5. In **Clients**, click **Create client**, choose **Desktop app**, name it
+   `Vision`, create it, and click **Download JSON**.
+6. Leave the file in `~/Downloads` (Vision picks up the newest
+   `client_secret_*.json` there) or save it as
+   `~/.config/vision/google_client.json`.
+7. Say "connect my Google Calendar". The browser opens Google's sign-in. Google
+   says the app is not verified, because it is your own: click **Advanced**,
+   then **Go to Vision**, tick the calendar permissions and continue. Vision
+   says when it is connected.
+
+The sign-in is kept in `~/.config/vision/google_calendar_token.json`, readable
+only by you. Vision asks for two permissions: events on your calendars, and the
+list of your calendars. It cannot change calendar settings or sharing. "Sign out
+of Google Calendar" deletes the token; to revoke it at Google too, remove Vision
+at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
+
+Tests that need no Google account: `python -m actions._google_calendar_tests`.
 
 ## Wayland
 

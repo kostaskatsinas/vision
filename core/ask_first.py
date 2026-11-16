@@ -2,7 +2,7 @@
 core/ask_first.py - Vision's ask-first rule.
 
 Vision must ask before it deletes files, sends a message or email, or installs
-software. This module decides which tool calls fall under that rule and parks
+software. Deleting a calendar event and inviting people to one count too. This module decides which tool calls fall under that rule and parks
 them behind the on-screen CONFIRM / CANCEL banner from core/confirm.py.
 
 The decision is made here, in code, from the tool name and its arguments. The
@@ -33,6 +33,13 @@ def bind(notify: Callable[[str], None]) -> None:
     """`notify(text)` reports a confirmed action's result to the assistant."""
     global _notify
     _notify = notify
+
+
+def tell(text: str) -> None:
+    """Pass a result that finished later (a confirmed action, a sign-in in the
+    browser) back to the assistant, so it can tell the user."""
+    if _notify:
+        _notify(text)
 
 
 def _short(text, limit: int = 140) -> str:
@@ -68,6 +75,12 @@ def describe(name: str, args: dict, is_plugin: bool = False) -> Optional[tuple[s
         return ("Start a coding job",
                 "It writes and runs code and may install Python packages. "
                 + _short(what, 120))
+
+    if name == "google_calendar":
+        # Deleting an event, and inviting people (Google emails them). The
+        # calendar module resolves which event, so the banner names it.
+        from actions import google_calendar
+        return google_calendar.confirmation(args)
 
     if is_plugin:
         low = name.lower()
