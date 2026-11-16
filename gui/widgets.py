@@ -142,7 +142,7 @@ class LogWidget(QTextEdit):
         self._pos     = 0
         self._tag     = "sys"
         self._fmt     = QTextCharFormat()
-        self._ai_name_lc = "jarvis"   # updated when assistant name changes
+        self._ai_name_lc = "vision"   # updated when assistant name changes
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._sig.connect(self._enqueue)
@@ -166,7 +166,7 @@ class LogWidget(QTextEdit):
         tl = text.lower()
         if tl.startswith("you:"):
             return "you", "YOU", rest.strip()
-        if sep and (tl.startswith(f"{self._ai_name_lc}:") or tl.startswith("jarvis:")):
+        if sep and (tl.startswith(f"{self._ai_name_lc}:") or tl.startswith("vision:")):
             return "ai", head.strip().upper(), rest.strip()
         key = head.strip().lower()
         if sep and key in self._TAGS:
@@ -290,7 +290,7 @@ def _fmt_size(size: int) -> str:
 # the count of files the coding model will actually look at.
 _SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "venv", ".venv", "env",
               "__pycache__", ".mypy_cache", ".pytest_cache", "dist", "build",
-              ".idea", ".vscode", ".next", "target", ".jarvis_backup"}
+              ".idea", ".vscode", ".next", "target", ".vision_backup"}
 
 
 def _count_files(folder: Path, cap: int = 5000) -> int:
@@ -385,14 +385,14 @@ class FileDropZone(QWidget):
         chosen = menu.exec(QCursor.pos())
         if chosen is pick_dir:
             path = QFileDialog.getExistingDirectory(
-                self, "Select a project folder for JARVIS", str(Path.home()))
+                self, "Select a project folder for VISION", str(Path.home()))
             if path:
                 self._set_file(path)
             return
         if chosen is not pick_file:
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select a file for JARVIS", str(Path.home()),
+            self, "Select a file for VISION", str(Path.home()),
             "All Files (*.*);;"
             "Images (*.jpg *.jpeg *.png *.gif *.webp *.bmp *.svg);;"
             "Documents (*.pdf *.docx *.txt *.md *.pptx);;"

@@ -32,7 +32,7 @@ WHY THIS EXISTS
                   changed plugin called the way the app calls it.
 
     PROFILES  Knowledge about one kind of project that cannot be read from
-              files alone. There is one, for JARVIS itself, because people
+              files alone. There is one, for VISION itself, because people
               improve the assistant with the assistant; adding another means
               adding a class to _PROFILES.
 """
@@ -54,7 +54,7 @@ _GUIDE_CHARS = 40_000
 _HARNESS = Path(__file__).with_name("_smoke_harness.py")
 _SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "venv", ".venv", "env",
               "__pycache__", ".mypy_cache", ".pytest_cache", "dist", "build",
-              ".idea", ".vscode", ".next", "target", ".jarvis_backup"}
+              ".idea", ".vscode", ".next", "target", ".vision_backup"}
 _TEST_TIMEOUT = 180
 
 
@@ -478,7 +478,7 @@ def runtime_problems(folder: Path, written: dict[str, str], originals: dict[str,
         r = subprocess.run(
             [stack["python"], str(_HARNESS), str(folder),
              json.dumps({"imports": imports, "plugins": plugin_runs,
-                         "profile": "jarvis" if "jarvis" in stack["profiles"] else ""})],
+                         "profile": "vision" if "vision" in stack["profiles"] else ""})],
             cwd=str(folder), env=env, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=limit)
     except subprocess.TimeoutExpired as e:
@@ -590,13 +590,13 @@ def test_regressions(before: dict | None, after: dict | None) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 #  Profiles
 # ─────────────────────────────────────────────────────────────────────────────
-class _JarvisProfile:
+class _VisionProfile:
     """This assistant, improved by itself. Its rules cannot be read from the
     files alone: tools run on worker threads, Qt widgets may only be made on
     the main thread, and the screen is reached through thread-safe `player`
     methods. Learned the hard way — see AGENTS.md."""
 
-    name = "jarvis"
+    name = "vision"
     _WIDGETS = ("PyQt6.QtWidgets", "PyQt6.QtGui")
     _TOOL_DIRS = ("plugins/", "actions/")
     # run() is only called when nothing in the plugin can act on the world:
@@ -623,7 +623,7 @@ class _JarvisProfile:
             return ""
         lines = []
         for node in tree.body:
-            if not (isinstance(node, ast.ClassDef) and node.name == "JarvisUI"):
+            if not (isinstance(node, ast.ClassDef) and node.name == "VisionUI"):
                 continue
             for f in node.body:
                 if not isinstance(f, ast.FunctionDef) or f.name.startswith("_"):
@@ -715,7 +715,7 @@ class _JarvisProfile:
         return out
 
 
-_PROFILES = [_JarvisProfile()]
+_PROFILES = [_VisionProfile()]
 
 
 def static_problems(folder: Path, written: dict[str, str], stack: dict) -> dict[str, str]:

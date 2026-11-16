@@ -1,7 +1,7 @@
 """ui.py — the entry point to the HUD.
 
 Mark LVII moved the implementation into the gui/ package. This file keeps
-JarvisUI — the object main.py builds and every plugin receives as `player` —
+VisionUI — the object main.py builds and every plugin receives as `player` —
 and re-exports every name ui.py has ever defined, so `from ui import X`
 written against an older Mark still finds X here.
 """
@@ -106,7 +106,7 @@ def _install_qt_message_filter() -> None:
     qInstallMessageHandler(_handler)
 
 
-class JarvisUI:
+class VisionUI:
     def __init__(self, face_path: str, size=None):
         _apply_ui_scale()
         _install_qt_message_filter()
@@ -252,7 +252,7 @@ class JarvisUI:
 
     def push_visemes(self, frames, hop: float, at: float) -> None:
         """Thread-safe: post a schedule of (level, openness, width) mouth frames
-        for JARVIS's own speech. `at` is the wall-clock time the batch begins to
+        for VISION's own speech. `at` is the wall-clock time the batch begins to
         sound, not the time of the call. See HudCanvas.push_visemes()."""
         try:
             self._win.hud.push_visemes(frames, hop, at)
@@ -285,7 +285,7 @@ class JarvisUI:
 
         `grade(question, given)` decides each answer — the plugin supplies it so
         the marking rules live with the questions rather than being duplicated
-        here. Returning None from it means "JARVIS should judge this one", which
+        here. Returning None from it means "VISION should judge this one", which
         is how open answers and near-miss gap-fills are handled.
 
         Returns immediately: the user answers at their own pace and the finished
@@ -326,7 +326,7 @@ class JarvisUI:
         together and kept in step.
 
         Muted by default, and that is a decision rather than a default: a
-        soundtrack talking over JARVIS is the one way this could make the
+        soundtrack talking over VISION is the one way this could make the
         assistant worse. The user turns sound on from the header button or by
         asking, and closes it the same two ways.
         """
@@ -342,7 +342,7 @@ class JarvisUI:
 
         `generate_image` has been calling this method by name since it was
         written, against the possibility that it would one day exist. It does
-        now, so a picture JARVIS draws appears on the HUD instead of only in a
+        now, so a picture VISION draws appears on the HUD instead of only in a
         folder.
         """
         self._win._image_open_sig.emit(str(path or ""), str(title or ""))
