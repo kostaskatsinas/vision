@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from core import confirm as confirm_gate
+from core import outcome
 
 # Plugin tools are downloaded from the community, so their names are not known
 # in advance. A plugin whose name says it sends, mails or installs is gated as
@@ -45,6 +46,14 @@ def tell(text: str) -> None:
 def _short(text, limit: int = 140) -> str:
     text = " ".join(str(text or "").split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _for_model(result: str, limit: int) -> str:
+    """Shorten a result for the model without cutting off the end marker of
+    outside data (core/outcome.untrusted), which would leave it unclosed."""
+    if "<<<UNTRUSTED" in str(result):
+        return outcome.untrusted("tool-result", _short(outcome.unwrap(result), limit))
+    return _short(result, limit)
 
 
 def describe(name: str, args: dict, is_plugin: bool = False) -> Optional[tuple[str, str]]:
@@ -109,10 +118,10 @@ def guard(name: str, args: dict, run: Callable[[], str], is_plugin: bool = False
         if _notify:
             try:
                 _notify(f"[SYSTEM] The user confirmed '{title}' on screen and it "
-                        f"has now run. Result: {_short(result, 600)}. Tell the "
+                        f"has now run. Result: {_for_model(result, 600)}. Tell the "
                         f"user briefly how it went.")
             except Exception:
                 pass
-        return _short(result, 200)
+        return _short(outcome.unwrap(result), 200)    # shown to the user
 
     return confirm_gate.request(f"ask_first:{name}", title, detail, _confirmed)
