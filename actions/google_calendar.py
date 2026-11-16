@@ -634,7 +634,10 @@ def confirmation(args: dict) -> Optional[tuple[str, str]]:
         detail = f"Remove {_label(ev)} from your calendar."
         if guests:
             detail += f" Google will tell {len(guests)} guest(s) it is cancelled."
-        return f"Delete event {(ev.get('summary') or '')[:50]}", detail
+        # The event's name goes only in the detail, which is shown on the
+        # banner to the user. The title is also repeated to the model, and an
+        # event's name can be written by someone else.
+        return "Delete a calendar event", detail
     if action == "create":
         guests = _emails(args)
         if guests:
@@ -703,8 +706,10 @@ def _connect(player=None) -> str:
             except Exception:
                 pass
         try:
-            from core import ask_first
-            ask_first.tell(f"[SYSTEM] {text} Tell the user briefly.")
+            from core import ask_first, outcome
+            ask_first.tell("[SYSTEM] The Google Calendar sign-in finished. "
+                           + outcome.untrusted("calendar", text)
+                           + " Tell the user briefly.")
         except Exception:
             pass
 
@@ -770,17 +775,21 @@ def google_calendar(parameters: dict, player=None) -> str:
                     "create, update, delete, connect, sign_out or status.")
     except CalendarError as e:
         _pinned.pop(id(p), None)
-        return f"Calendar: {e}"
+        result = f"Calendar: {e}"
     except Exception as e:
         _pinned.pop(id(p), None)
         print(f"[Calendar] {type(e).__name__}: {e}")
-        return f"Calendar failed: {e}"
+        result = f"Calendar failed: {e}"
     if player:
         try:
             player.write_log(f"[Calendar] {result.splitlines()[0][:80]}")
         except Exception:
             pass
-    return result
+    # Event titles, places and calendar names can be written by other people
+    # (an invitation, a shared calendar), so the result goes to the model as
+    # data, like a web page. See core/outcome.untrusted().
+    from core import outcome
+    return outcome.untrusted("calendar", result)
 
 
 TOOL = {
