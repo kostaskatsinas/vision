@@ -255,17 +255,37 @@ def maximize_window():
 
 def snap_left():
     try:
-        subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,0,0,960,1080"],
-            capture_output=True)
+        from core import wayland_desktop
+        if wayland_desktop.available():
+            wayland_desktop.tiling_shell_action("tile", "left")
+            return
     except Exception:
         pass
+    try:
+        r = subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,0,0,960,1080"],
+                           capture_output=True)
+        if r.returncode == 0:
+            return
+    except Exception:
+        pass
+    pyautogui.hotkey("super", "left")
 
 def snap_right():
     try:
-        subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,960,0,960,1080"],
-            capture_output=True)
+        from core import wayland_desktop
+        if wayland_desktop.available():
+            wayland_desktop.tiling_shell_action("tile", "right")
+            return
     except Exception:
         pass
+    try:
+        r = subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-e", "0,960,0,960,1080"],
+                           capture_output=True)
+        if r.returncode == 0:
+            return
+    except Exception:
+        pass
+    pyautogui.hotkey("super", "right")
 
 def switch_window():
     pyautogui.hotkey("alt", "tab")

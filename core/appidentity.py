@@ -49,19 +49,212 @@ from __future__ import annotations
 import os
 import platform
 import re
+import signal
 import subprocess
 import sys
 import time
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from core.lazyimport import LazyModule, installed
 
-_PSUTIL = installed("psutil")
-psutil = LazyModule("psutil")
+
+class _LinuxProcBackend:
+    """Pure-Python `/proc` implementation of the `psutil` subset used by this
+    module on Linux when `psutil` is not installed."""
+
+    STATUS_ZOMBIE = "zombie"
+
+    class NoSuchProcess(Exception):
+        pass
+
+    class AccessDenied(Exception):
+        pass
+
+    class Process:
+        def __init__(self, pid: int):
+            self.pid = int(pid)
+            self.info: dict[str, Any] = {}
+            if not os.path.isdir(f"/proc/{self.pid}"):
+                raise _LinuxProcBackend.NoSuchProcess(self.pid)
+
+        def _stat_fields(self) -> tuple[str, str, int]:
+            try:
+                with open(f"/proc/{self.pid}/stat", "r", encoding="utf-8", errors="replace") as f:
+                    raw = f.read()
+                rparen = raw.rfind(")")
+                lparen = raw.find("(")
+                comm = raw[lparen + 1:rparen] if (lparen >= 0 and rparen > lparen) else ""
+                rest = raw[rparen + 2:].split()
+                state = rest[0] if len(rest) > 0 else ""
+                ppid = int(rest[1]) if len(rest) > 1 else 0
+                return comm, state, ppid
+            except FileNotFoundError as exc:
+                raise _LinuxProcBackend.NoSuchProcess(self.pid) from exc
+            except PermissionError as exc:
+                raise _LinuxProcBackend.AccessDenied(self.pid) from exc
+
+        def name(self) -> str:
+            try:
+                with open(f"/proc/{self.pid}/comm", "r", encoding="utf-8", errors="replace") as f:
+                    return f.read().strip()
+            except FileNotFoundError as exc:
+                raise _LinuxProcBackend.NoSuchProcess(self.pid) from exc
+            except PermissionError as exc:
+                raise _LinuxProcBackend.AccessDenied(self.pid) from exc
+
+        def exe(self) -> str:
+            try:
+                target = os.readlink(f"/proc/{self.pid}/exe")
+                if target.endswith(" (deleted)"):
+                    target = target[:-10]
+                return target
+            except FileNotFoundError as exc:
+                if not os.path.isdir(f"/proc/{self.pid}"):
+                    raise _LinuxProcBackend.NoSuchProcess(self.pid) from exc
+                return ""
+            except PermissionError as exc:
+                raise _LinuxProcBackend.AccessDenied(self.pid) from exc
+
+        def cmdline(self) -> list[str]:
+            try:
+                with open(f"/proc/{self.pid}/cmdline", "rb") as f:
+                    data = f.read()
+                if not data:
+                    return []
+                return [p for p in data.decode("utf-8", "replace").split("\x00") if p]
+            except FileNotFoundError as exc:
+                raise _LinuxProcBackend.NoSuchProcess(self.pid) from exc
+            except PermissionError as exc:
+                raise _LinuxProcBackend.AccessDenied(self.pid) from exc
+
+        def status(self) -> str:
+            _, state, _ = self._stat_fields()
+            return _LinuxProcBackend.STATUS_ZOMBIE if state == "Z" else "running"
+
+        def is_running(self) -> bool:
+            try:
+                return os.path.isdir(f"/proc/{self.pid}") and self.status() != _LinuxProcBackend.STATUS_ZOMBIE
+            except Exception:
+                return False
+
+        def parent(self) -> Optional["_LinuxProcBackend.Process"]:
+            try:
+                _, _, ppid = self._stat_fields()
+                if ppid > 0:
+                    return _LinuxProcBackend.Process(ppid)
+            except Exception:
+                pass
+            return None
+
+        def children(self, recursive: bool = False) -> list["_LinuxProcBackend.Process"]:
+            by_parent: dict[int, list[int]] = {}
+            for pid in _LinuxProcBackend.pids():
+                try:
+                    p = _LinuxProcBackend.Process(pid)
+                    _, _, ppid = p._stat_fields()
+                    by_parent.setdefault(ppid, []).append(pid)
+                except Exception:
+                    continue
+            out: list[_LinuxProcBackend.Process] = []
+            queue = list(by_parent.get(self.pid, []))
+            seen = set(queue)
+            while queue:
+                cid = queue.pop(0)
+                try:
+                    out.append(_LinuxProcBackend.Process(cid))
+                except Exception:
+                    pass
+                if recursive:
+                    for gcid in by_parent.get(cid, []):
+                        if gcid not in seen:
+                            seen.add(gcid)
+                            queue.append(gcid)
+            return out
+
+        def _reap_if_child(self) -> None:
+            try:
+                os.waitpid(self.pid, os.WNOHANG)
+            except Exception:
+                pass
+
+        def terminate(self) -> None:
+            try:
+                os.kill(self.pid, signal.SIGTERM)
+                self._reap_if_child()
+            except ProcessLookupError as exc:
+                raise _LinuxProcBackend.NoSuchProcess(self.pid) from exc
+            except PermissionError as exc:
+                raise _LinuxProcBackend.AccessDenied(self.pid) from exc
+
+        def kill(self) -> None:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+                self._reap_if_child()
+            except ProcessLookupError as exc:
+                raise _LinuxProcBackend.NoSuchProcess(self.pid) from exc
+            except PermissionError as exc:
+                raise _LinuxProcBackend.AccessDenied(self.pid) from exc
+
+    @staticmethod
+    def pids() -> list[int]:
+        try:
+            return [int(d) for d in os.listdir("/proc") if d.isdigit()]
+        except Exception:
+            return []
+
+    @staticmethod
+    def process_iter(attrs: Optional[list[str]] = None):
+        want = set(attrs or ("pid", "name", "exe", "cmdline"))
+        for pid in _LinuxProcBackend.pids():
+            try:
+                p = _LinuxProcBackend.Process(pid)
+                info: dict[str, Any] = {"pid": pid}
+                if "name" in want:
+                    info["name"] = p.name()
+                if "exe" in want:
+                    try:
+                        info["exe"] = p.exe() or None
+                    except Exception:
+                        info["exe"] = None
+                if "cmdline" in want:
+                    try:
+                        info["cmdline"] = p.cmdline()
+                    except Exception:
+                        info["cmdline"] = []
+                p.info = info
+                yield p
+            except Exception:
+                continue
+
+    @staticmethod
+    def wait_procs(procs: list["_LinuxProcBackend.Process"], timeout: float = 3.0):
+        deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+        while True:
+            alive = []
+            gone = []
+            for p in procs:
+                p._reap_if_child()
+                if p.is_running():
+                    alive.append(p)
+                else:
+                    gone.append(p)
+            if not alive or time.monotonic() >= deadline:
+                return gone, alive
+            time.sleep(0.05)
+
 
 _OS = platform.system()          # "Windows" | "Darwin" | "Linux"
+if installed("psutil"):
+    _PSUTIL = True
+    psutil: Any = LazyModule("psutil")
+elif _OS == "Linux" and os.path.isdir("/proc"):
+    _PSUTIL = True
+    psutil = _LinuxProcBackend
+else:
+    _PSUTIL = False
+    psutil = LazyModule("psutil")
 
 # Everything that is not a letter or a digit, in any script. Spaces, dots,
 # hyphens and underscores all vanish, so "Visual Studio Code", "visual-studio
@@ -255,10 +448,15 @@ def own_exes(chain: Optional[set[int]] = None) -> set[str]:
     # regression run in which `close_app("python")` answered `status=done` —
     # the guard held on every attempt to reproduce it, which is exactly why it
     # needed a floor that does not depend on reproducing anything.
+    #
+    # Walk `_ancestor_pids()`, NEVER `_chain_pids()`: `_chain_pids()` includes
+    # children this process launched (e.g. Spotify, Chrome), and caching their
+    # executables here made `request_close` refuse to close any application the
+    # assistant had opened.
     found: set[str] = set()
     if sys.executable:
         found.add(os.path.normcase(sys.executable))
-    for pid in (chain or _chain_pids()):
+    for pid in (chain or _ancestor_pids()):
         try:
             exe = psutil.Process(pid).exe()
             if exe:
@@ -383,46 +581,25 @@ def _own_stem() -> str:
 def own_pids() -> set[int]:
     """Every process whose death would take the assistant with it, or damage it.
 
-    FOUR GROUPS, AND THE FOURTH WAS LEARNED THE HARD WAY
-
+    THREE GROUPS:
       * this process
-      * everything it started — a browser driven by playwright, a helper the
-        assistant spawned
       * every ancestor. The terminal or launcher that owns this process kills
         it when it goes, so "close the terminal" while running from one is the
         self-close bug wearing a different hat
-      * EVERY PROCESS SHARING AN EXECUTABLE WITH ANY OF THE ABOVE — the
-        siblings
+      * EVERY PROCESS SHARING AN EXECUTABLE WITH ANY OF THE ABOVE — including
+        Python helpers this process spawned.
 
-    The first three are a CHAIN. A modern desktop application is a TREE: one
-    executable, a main process, and a dozen siblings for windows, rendering and
-    networking, none of which is an ancestor or a descendant of any particular
-    one of the others.
-
-    That gap was not theoretical. Testing this very module against a running
-    Electron application, the chain protected the two processes above this one
-    and closed thirteen siblings — the main window survived and the application
-    was gutted around it. Chain membership was the wrong question; "is this the
-    same program I am part of" is the right one, and an executable path answers
-    it on every operating system without knowing a single application's name.
-
-    THE BROAD SIDE IS THE SAFE SIDE
-        This also protects an unrelated script that happens to run under the
-        same interpreter — say "close python" while the assistant is itself
-        python, and it refuses and says why. That is the correct direction to
-        err: a refusal costs the user one sentence, and closing the assistant
-        costs them the conversation.
-
-    Never raises. A process table that cannot be read still yields our own pid,
-    so the guard degrades to "never close literally myself" rather than to
-    "close anything".
+    Applications the user asked the assistant to open (`open_app`) are children
+    of this process until they detach, so `_ancestor_pids()` is used rather than
+    `_chain_pids()` — otherwise the assistant would refuse to close or kill any
+    application it had launched itself.
     """
-    pids = _chain_pids()
+    pids = _ancestor_pids()
     if not _PSUTIL:
         return pids
 
-    # The siblings, found by executable — see own_exes().
-    our_exes = own_exes(pids)
+    # The siblings and Python helpers, found by executable — see self_exes().
+    our_exes = self_exes() | own_exes(pids)
     if our_exes:
         try:
             for proc in psutil.process_iter(["pid", "exe"]):
@@ -562,7 +739,7 @@ def running(spoken: str, include_self: bool = False) -> list[Match]:
     out: list[Match] = []
 
     try:
-        procs = list(psutil.process_iter(["pid", "name", "exe"]))
+        procs = list(psutil.process_iter(["pid", "name", "exe", "cmdline"]))
     except Exception as exc:
         print(f"[appidentity] process list unavailable: {exc}")
         return []
@@ -573,12 +750,8 @@ def running(spoken: str, include_self: bool = False) -> list[Match]:
             name = proc.info.get("name") or ""
             if not pid or not name:
                 continue
-            titles = titles_by_pid.get(pid, [])
-            best = max((_score(q, name, titles) for q in queries), default=0)
-            if best <= 0:
-                continue
-            if titles:
-                best += _HAS_WINDOW
+            exe = proc.info.get("exe")
+            cmdline = proc.info.get("cmdline") or []
             # SELF-DETECTION MUST NOT DEPEND ON A READ THAT CAN FAIL.
             #
             # `exe` comes back None for a process that is exiting, and for one
@@ -592,7 +765,6 @@ def running(spoken: str, include_self: bool = False) -> list[Match]:
             # python.exe is ours as far as this decision goes — the cost of
             # being wrong that way is one refusal, and the cost of being wrong
             # the other way is ending a process nobody meant to end.
-            exe = proc.info.get("exe")
             if exe:
                 is_own_binary = os.path.normcase(exe) in ours
             else:
@@ -600,7 +772,33 @@ def running(spoken: str, include_self: bool = False) -> list[Match]:
             is_self = pid in chain or is_own_binary
             if is_self and not include_self:
                 continue
-            out.append(Match(pid=pid, name=name, score=best,
+
+            titles = titles_by_pid.get(pid, [])
+            best = max((_score(q, name, titles) for q in queries), default=0)
+            display_name = name
+
+            # On Linux, /proc/<pid>/comm (`name`) is truncated to 15 characters
+            # by the kernel. Also check the executable basename and argv[0]
+            # basename so longer binary names and wrapper launches still match.
+            if not is_own_binary:
+                alt_names: list[str] = []
+                if exe:
+                    alt_names.append(os.path.basename(exe))
+                if cmdline and isinstance(cmdline[0], str) and cmdline[0]:
+                    arg0 = os.path.basename(cmdline[0].split()[0])
+                    if arg0 and arg0 not in alt_names:
+                        alt_names.append(arg0)
+                for alt in alt_names:
+                    alt_score = max((_score(q, alt, titles) for q in queries), default=0)
+                    if alt_score > best:
+                        best = alt_score
+                        display_name = alt
+
+            if best <= 0:
+                continue
+            if titles:
+                best += _HAS_WINDOW
+            out.append(Match(pid=pid, name=display_name, score=best,
                              is_self=is_self, titles=titles))
         except Exception:
             # A process that exited between listing and reading is normal and
@@ -686,7 +884,7 @@ def wait_for_launch(spoken: str, before: set[int],
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Closing
+#  Closing & Killing
 # ─────────────────────────────────────────────────────────────────────────────
 def _post_close_windows(pid: int) -> int:
     """Ask each of a process's visible windows to close. Returns how many were
@@ -699,6 +897,242 @@ def _post_close_windows(pid: int) -> int:
     desktop application somebody is using.
     """
     return 0
+
+
+def collect_app_pids(matches: list[Match]) -> tuple[list[int], str]:
+    """Gather every PID belonging to the matched application, including all
+    child/descendant helper processes and same-binary siblings, while strictly
+    excluding the assistant's own protected processes.
+
+    Returns `(pids, reason_if_empty)`.
+    """
+    if not _PSUTIL:
+        return [], ("psutil is not installed, so applications cannot be "
+                    "found or closed - run: pip install psutil")
+    if not matches:
+        return [], "no matching processes were given"
+
+    protected_pids = own_pids()
+    protected_exes = self_exes() | own_exes()
+    target_pids: list[int] = []
+    seen: set[int] = set()
+    app_exes: set[str] = set()
+    last_reason = ""
+
+    def _add_pid(pid: int) -> None:
+        if pid in seen or pid in protected_pids or pid == os.getpid() or pid <= 1:
+            return
+        try:
+            proc = psutil.Process(pid)
+            exe = proc.exe()
+            if exe and os.path.normcase(exe) in protected_exes:
+                return
+        except psutil.NoSuchProcess:
+            return
+        except Exception:
+            pass
+        seen.add(pid)
+        target_pids.append(pid)
+
+    for match in matches:
+        if match.is_self or match.pid == os.getpid() or match.pid in protected_pids:
+            last_reason = ("that is the assistant's own process, so nothing was "
+                           "closed")
+            continue
+        try:
+            proc = psutil.Process(match.pid)
+            target_exe = proc.exe()
+            if target_exe and os.path.normcase(target_exe) in protected_exes:
+                last_reason = ("that is running the same program as the assistant "
+                               "itself, so nothing was closed")
+                continue
+            if target_exe:
+                app_exes.add(os.path.normcase(target_exe))
+        except psutil.NoSuchProcess:
+            last_reason = ("that process had already exited before it could be "
+                           "closed, so nothing was done to it")
+            continue
+        except Exception:
+            # Even if .exe() cannot be read (e.g. script or permission), allow
+            # if not in protected_pids and name is not our own stem.
+            if fold(os.path.splitext(match.name)[0]) == _own_stem():
+                last_reason = ("this process cannot be inspected, so it was left "
+                               "alone rather than closed on a guess")
+                continue
+
+        _add_pid(match.pid)
+        try:
+            for child in psutil.Process(match.pid).children(recursive=True):
+                _add_pid(child.pid)
+        except Exception:
+            continue
+
+    # Also include any sibling processes running the exact same application
+    # binary and their children.
+    if app_exes:
+        try:
+            for proc in psutil.process_iter(["pid", "exe"]):
+                try:
+                    exe = proc.info.get("exe")
+                    if exe and os.path.normcase(exe) in app_exes:
+                        _add_pid(proc.info["pid"])
+                        for child in proc.children(recursive=True):
+                            _add_pid(child.pid)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    return target_pids, ("" if target_pids else (last_reason or "no processes could be targeted"))
+
+
+def kill_app_processes(matches: list[Match], timeout: float = 3.0) -> tuple[int, int, str]:
+    """Force-kill (`SIGKILL`) all processes belonging to `matches` (including
+    child/helper processes).
+
+    Returns `(killed_count, still_running_count, reason)`.
+    """
+    target_pids, reason = collect_app_pids(matches)
+    if not target_pids:
+        return 0, 0, reason
+
+    procs: list["psutil.Process"] = []
+    access_denied = False
+    last_err = ""
+
+    for pid in target_pids:
+        try:
+            procs.append(psutil.Process(pid))
+        except psutil.NoSuchProcess:
+            continue
+        except Exception as exc:
+            last_err = str(exc)
+
+    # Snapshot any grandchildren right before sending SIGKILL so nothing is
+    # missed if a parent dies first.
+    seen_pids = {p.pid for p in procs}
+    protected_pids = own_pids()
+    for p in list(procs):
+        try:
+            for child in p.children(recursive=True):
+                if child.pid not in seen_pids and child.pid not in protected_pids:
+                    seen_pids.add(child.pid)
+                    procs.append(child)
+        except Exception:
+            continue
+
+    for p in procs:
+        try:
+            p.kill()
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied:
+            access_denied = True
+        except Exception as exc:
+            last_err = str(exc)
+
+    if procs:
+        try:
+            _, alive = psutil.wait_procs(procs, timeout=max(0.2, timeout))
+            if alive:
+                for p in alive:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+                psutil.wait_procs(alive, timeout=0.5)
+        except Exception:
+            pass
+
+    still_open = sum(1 for pid in seen_pids if is_running(pid))
+    killed = max(0, len(seen_pids) - still_open)
+    if still_open and access_denied:
+        reason = ("the system refused - it is running with higher "
+                  "privileges than the assistant")
+    elif still_open:
+        reason = last_err or "some processes did not exit after SIGKILL"
+    return killed, still_open, reason
+
+
+def close_app_processes(matches: list[Match], timeout: float = 4.0,
+                        force_after: bool = True) -> tuple[int, int, str]:
+    """Close all processes belonging to `matches` (including child/helper
+    processes). Sends `SIGTERM` first so the app can shut down cleanly, and if
+    `force_after` is True, sends `SIGKILL` to any remaining processes that
+    failed to exit within the polite window.
+
+    Returns `(closed_count, still_running_count, reason)`.
+    """
+    target_pids, reason = collect_app_pids(matches)
+    if not target_pids:
+        return 0, 0, reason
+
+    procs: list["psutil.Process"] = []
+    access_denied = False
+    last_err = ""
+
+    for pid in target_pids:
+        try:
+            procs.append(psutil.Process(pid))
+        except psutil.NoSuchProcess:
+            continue
+        except Exception as exc:
+            last_err = str(exc)
+
+    seen_pids = {p.pid for p in procs}
+    for p in procs:
+        try:
+            if _post_close_windows(p.pid) == 0:
+                p.terminate()
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied:
+            access_denied = True
+        except Exception as exc:
+            last_err = str(exc)
+
+    polite_wait = max(0.3, timeout * 0.5 if force_after else timeout)
+    alive: list["psutil.Process"] = []
+    if procs:
+        try:
+            _, alive = psutil.wait_procs(procs, timeout=polite_wait)
+        except Exception:
+            alive = [p for p in procs if is_running(p.pid)]
+
+    if alive and force_after:
+        protected_pids = own_pids()
+        for p in list(alive):
+            try:
+                for child in p.children(recursive=True):
+                    if child.pid not in seen_pids and child.pid not in protected_pids:
+                        seen_pids.add(child.pid)
+                        alive.append(child)
+            except Exception:
+                continue
+        for p in alive:
+            try:
+                p.kill()
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied:
+                access_denied = True
+            except Exception as exc:
+                last_err = str(exc)
+        try:
+            psutil.wait_procs(alive, timeout=max(0.3, timeout - polite_wait))
+        except Exception:
+            pass
+
+    still_open = sum(1 for pid in seen_pids if is_running(pid))
+    closed = max(0, len(seen_pids) - still_open)
+    if still_open and access_denied:
+        reason = ("the system refused - it is running with higher "
+                  "privileges than the assistant")
+    elif still_open:
+        reason = last_err or ("it is still running after being asked to close - "
+                              "it may be showing a dialog, such as asking whether "
+                              "to save changes")
+    return closed, still_open, reason
 
 
 def request_close(match: Match, timeout: float = 6.0) -> tuple[bool, str]:

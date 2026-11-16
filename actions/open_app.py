@@ -91,6 +91,25 @@ _LINUX_TERMINALS = [
 ]
 
 
+def _on_wayland() -> bool:
+    try:
+        from core import wayland_desktop
+        return wayland_desktop.available()
+    except Exception:
+        return False
+
+
+def _place_pointer_on_monitor(monitor_spec: str) -> dict | None:
+    """Select `monitor_spec` as the active Wayland monitor and move the pointer
+    to its centre so GNOME Mutter opens new windows on that monitor."""
+    if not monitor_spec or not _on_wayland():
+        return None
+    from core import wayland_desktop
+    mon = wayland_desktop.use_monitor(monitor_spec)
+    wayland_desktop.move_to(mon["width"] // 2, mon["height"] // 2)
+    return mon
+
+
 def _launch_linux(app_name: str) -> bool:
     # "terminal" means whichever one this distribution actually ships.
     if app_name in ("x-terminal-emulator", "gnome-terminal", "terminal"):
@@ -100,7 +119,10 @@ def _launch_linux(app_name: str) -> bool:
                 continue
             try:
                 subprocess.Popen(
-                    [path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    [path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
                 )
                 return True
             except Exception:
@@ -115,7 +137,10 @@ def _launch_linux(app_name: str) -> bool:
     if binary:
         try:
             subprocess.Popen(
-                [binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                [binary],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
             return True
         except Exception:
@@ -176,8 +201,14 @@ def _say(player, instruction: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 #  Launch + verify, off the conversation's thread
 # ─────────────────────────────────────────────────────────────────────────────
-def _launch_and_verify(player, spoken: str, launcher_name: str,
-                       before: set[int]) -> None:
+def _launch_and_verify(
+    player,
+    spoken: str,
+    launcher_name: str,
+    before: set[int],
+    target_mon: dict | None = None,
+    tile_spec: str = "",
+) -> None:
     """The part that takes seconds. Speaks ONLY when something needs saying.
 
     Silence means it worked: the window is on the user's screen and a second
@@ -185,6 +216,12 @@ def _launch_and_verify(player, spoken: str, launcher_name: str,
     whatsapp_call.py applies to a phone that is already ringing.
     """
     try:
+        if target_mon is not None and _on_wayland():
+            try:
+                _place_pointer_on_monitor(str(target_mon["number"]))
+            except Exception as exc:
+                print(f"[open_app] monitor placement before launch failed: {exc}")
+
         launcher = _LAUNCHERS[_SYSTEM]
         requested = launcher(launcher_name)
         if not requested and launcher_name.lower() != spoken.lower():
@@ -194,7 +231,22 @@ def _launch_and_verify(player, spoken: str, launcher_name: str,
             spoken, before, timeout=_LAUNCH_TIMEOUT
         )
         if appeared is not None:
-            _log(player, f"VISION: {appeared.label} is open.")
+            if (target_mon is not None or tile_spec) and _on_wayland():
+                try:
+                    from core import wayland_desktop
+                    time.sleep(0.6)
+                    appidentity.focus(appeared)
+                    if target_mon is not None:
+                        wayland_desktop.use_monitor(target_mon["number"])
+                        wayland_desktop.move_to(
+                            target_mon["width"] // 2, target_mon["height"] // 2
+                        )
+                    if tile_spec:
+                        wayland_desktop.tiling_shell_action("tile", tile_spec)
+                except Exception as exc:
+                    print(f"[open_app] post-launch monitor/tile step failed: {exc}")
+            mon_note = f" on monitor {target_mon['number']}" if target_mon else ""
+            _log(player, f"VISION: {appeared.label} is open{mon_note}.")
             return
 
         if not requested:
@@ -220,7 +272,11 @@ def _launch_and_verify(player, spoken: str, launcher_name: str,
 # ─────────────────────────────────────────────────────────────────────────────
 def open_app(parameters=None, response=None, player=None,
              session_memory=None) -> str:
-    spoken = ((parameters or {}).get("app_name") or "").strip()
+    params = parameters or {}
+    spoken = (params.get("app_name") or "").strip()
+    monitor_spec = str(params.get("monitor") or params.get("screen") or "").strip()
+    tile_spec = str(params.get("tile") or params.get("direction") or "").strip()
+
     if not spoken:
         return outcome.failed("open_app", "no application name was given")
 
@@ -229,6 +285,18 @@ def open_app(parameters=None, response=None, player=None,
             "open_app", f"this operating system ({_SYSTEM}) is not supported",
             app=spoken,
         )
+
+    target_mon: dict | None = None
+    prev_mon: dict | None = None
+    if monitor_spec and _on_wayland():
+        try:
+            from core import wayland_desktop
+            prev_mon = wayland_desktop.working_monitor()
+            target_mon = _place_pointer_on_monitor(monitor_spec)
+        except Exception as exc:
+            return outcome.failed(
+                "open_app", str(exc), app=spoken, monitor=monitor_spec
+            )
 
     # Already open? Then there is nothing to launch and nothing to wait for,
     # and saying so is more useful than a second copy. This is also the one
@@ -245,37 +313,26 @@ def open_app(parameters=None, response=None, player=None,
     existing = appidentity.running(spoken, include_self=True)
     if existing:
         best = existing[0]
-        # ALREADY RUNNING IS NOT ALREADY DONE.
-        #
-        # This branch used to report "it was already open" and stop. That is
-        # true and useless: an application running behind three other windows
-        # is not on the user's screen, nothing changed when they asked, and
-        # from where they are sitting the assistant did not open anything.
-        # Reported as a bug in exactly those words — "it does not even open
-        # applications" — with WhatsApp and Edge both running in the tray.
-        #
-        # Clicking a taskbar icon for a running app raises its window. So does
-        # this. When there is no window to raise — a background service, or an
-        # app that has gone to the tray — focus() says so and the launcher runs
-        # below, which is what brings a tray app back.
-        # Try every candidate, not just the best-scoring one.
-        #
-        # A modern application is many processes and only one of them owns the
-        # window. Ranking puts the exact name match first, and on Windows that
-        # is routinely a background service: measured here, `WhatsApp` and
-        # `msedge` both scored 100 on processes with no window at all, so
-        # focusing "the best match" focused nothing and the branch gave up.
-        #
-        # Store apps are the harder half of the same thing — their window
-        # belongs to ApplicationFrameHost, not to the app's own process — which
-        # is why failing all of these falls through to the launcher rather than
-        # reporting failure. Typing the name into the Start Menu raises a
-        # running Store app, and that is the path that ends up serving them.
         for candidate in existing[:8]:
             if appidentity.focus(candidate):
+                if _on_wayland() and (target_mon is not None or tile_spec):
+                    try:
+                        from core import wayland_desktop
+                        time.sleep(0.25)
+                        if target_mon is not None:
+                            wayland_desktop.move_window_to_monitor(
+                                target_mon["number"],
+                                from_monitor=prev_mon["number"] if prev_mon else None,
+                            )
+                        if tile_spec:
+                            wayland_desktop.tiling_shell_action("tile", tile_spec)
+                    except Exception as exc:
+                        print(f"[open_app] move/tile focused window failed: {exc}")
+                mon_num = target_mon["number"] if target_mon else (monitor_spec or None)
                 _log(player, f"VISION: {candidate.label} brought to the front.")
                 return outcome.done(
                     "open_app", app=spoken, matched=candidate.label,
+                    monitor=mon_num, tile=tile_spec or None,
                     already_running=True, focused=True, verified=True,
                 )
         print(f"[open_app] {best.label} is running but no window could be "
@@ -284,11 +341,14 @@ def open_app(parameters=None, response=None, player=None,
 
     launcher_name = appidentity.launcher_name(spoken)
     before = appidentity.snapshot()
-    _log(player, f"VISION: Opening {spoken}…")
+    mon_label = f" on monitor {target_mon['number']}" if target_mon else (
+        f" on monitor {monitor_spec}" if monitor_spec else ""
+    )
+    _log(player, f"VISION: Opening {spoken}{mon_label}…")
 
     threading.Thread(
         target=_launch_and_verify,
-        args=(player, spoken, launcher_name, before),
+        args=(player, spoken, launcher_name, before, target_mon, tile_spec),
         daemon=True, name=f"open-app-{spoken[:20]}",
     ).start()
 
@@ -296,23 +356,32 @@ def open_app(parameters=None, response=None, player=None,
     # an invitation to repeat it verbatim — whatsapp_call.py has the receipt:
     # a request made in Turkish came back in English, padded with an offer
     # nobody had made. The model writes the sentence, in the user's language.
-    return outcome.started("open_app", app=spoken)
+    return outcome.started(
+        "open_app",
+        app=spoken,
+        monitor=target_mon["number"] if target_mon else (monitor_spec or None),
+        tile=tile_spec or None,
+    )
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "open_app",
     "description": (
-        "Opens an application on this computer. Use whenever the user asks to "
-        "open, launch or start any app or program. Put the application's name "
-        "in 'app_name' exactly as the user said it. "
+        "Opens an application on this computer, optionally on a specific "
+        "monitor (1..4, left, right, top, bottom, center, main) and/or tiled "
+        "with Tiling Shell. Use whenever the user asks to open, launch or "
+        "start any app or program ('open Spotify', 'open Spotify to monitor 1', "
+        "'open terminal on the left monitor'). Put the application's name in "
+        "'app_name' and, if the user named a monitor or screen, put it in "
+        "'monitor'. "
         "This tool answers immediately and confirms the launch in the "
         "background: on status=started say only that it is opening, never that "
         "it is open. If it does not appear, you will be told separately - "
         "relay that plainly rather than claiming success. Never say you opened "
         "something without calling this tool. "
-        "To CLOSE an application use computer_control with action='close_app', "
-        "not this tool. "
+        "To CLOSE or KILL an application use computer_control with "
+        "action='close_app' or action='kill_app', not this tool. "
         "DO NOT use this tool to reach a WEB PAGE. 'open Chrome and go to "
         "YouTube', 'open YouTube', 'search the web' are all browser_control "
         "alone - it opens the browser itself. Calling open_app for the browser "
@@ -334,7 +403,22 @@ TOOL = {
                     "matches the wrong program - 'wp' finds WPS Office. Any "
                     "application on the machine works; there is no fixed list."
                 ),
-            }
+            },
+            "monitor": {
+                "type": "STRING",
+                "description": (
+                    "Optional monitor to open the application on: a monitor "
+                    "number (1, 2, 3, 4) or position (left, right, top, "
+                    "bottom, center, main)."
+                ),
+            },
+            "tile": {
+                "type": "STRING",
+                "description": (
+                    "Optional Tiling Shell position on that monitor after "
+                    "opening: left | right | up | down | center | all."
+                ),
+            },
         },
         "required": ["app_name"],
     },

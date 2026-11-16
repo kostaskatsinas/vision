@@ -305,11 +305,248 @@ def test_shim() -> None:
         os.environ.pop("XDG_SESSION_TYPE", None)
 
 
+def test_gnome_display_config_and_monitor_resolution() -> None:
+    _fresh()
+    # Natural monitor descriptors on the default 4-monitor layout
+    check("monitor 1 phrase", wd.use_monitor("monitor 1")["number"] == 1)
+    check("screen 2 phrase", wd.use_monitor("screen #2")["number"] == 2)
+    check("ordinal third", wd.use_monitor("third")["number"] == 3)
+    check("ordinal fourth", wd.use_monitor("fourth")["number"] == 4)
+    check("center selects ultrawide", wd.use_monitor("center")["width"] == 5120)
+
+    # Simulate GNOME Settings -> Displays (`org.gnome.Mutter.DisplayConfig.GetCurrentState`)
+    # where the ultrawide (1080, 1080) is monitor 1 (primary), left portrait (0, 1080) is 2,
+    # right portrait (6200, 1080) is 3, and top 1080p (2555, 0) is 4.
+    fake_state = (
+        1,
+        [
+            (("DP-1", "SAM", "Odyssey G9", "001"), [], {"is-builtin": ("b", False), "display-name": ("s", "Samsung 49")}),
+            (("DP-2", "DEL", "Left Portrait", "002"), [], {"is-builtin": ("b", False), "display-name": ("s", "Dell Left")}),
+            (("DP-3", "DEL", "Right Portrait", "003"), [], {"is-builtin": ("b", False), "display-name": ("s", "Dell Right")}),
+            (("HDMI-1", "LG", "Top 1080p", "004"), [], {"is-builtin": ("b", False), "display-name": ("s", "LG Top")}),
+        ],
+        [
+            (1080, 1080, 1.0, 0, True, [("DP-1", "SAM", "Odyssey G9", "001")], {}),
+            (0, 1080, 1.0, 0, False, [("DP-2", "DEL", "Left Portrait", "002")], {}),
+            (6200, 1080, 1.0, 0, False, [("DP-3", "DEL", "Right Portrait", "003")], {}),
+            (2555, 0, 1.0, 0, False, [("HDMI-1", "LG", "Top 1080p", "004")], {}),
+        ],
+        {},
+    )
+    parsed = wd._parse_gnome_display_config(fake_state)
+    check("parsed 4 logical monitors", len(parsed) == 4)
+    check("DP-1 is ui_number 1 and primary",
+          parsed[(1080, 1080)]["ui_number"] == 1 and parsed[(1080, 1080)]["primary"] is True)
+    check("HDMI-1 is ui_number 4", parsed[(2555, 0)]["ui_number"] == 4)
+
+    real_fetcher = wd._display_config_fetcher
+    wd._display_config_fetcher = lambda _portal=None: parsed
+    try:
+        mons = wd.monitors()
+        check("monitors ordered by GNOME DisplayConfig number",
+              [m["number"] for m in mons] == [1, 2, 3, 4]
+              and mons[0]["width"] == 5120
+              and mons[1]["left"] == 0
+              and mons[2]["left"] == 6200
+              and mons[3]["top"] == 0,
+              str(mons))
+        check("resolve by connector name", wd.resolve_monitor("hdmi-1")["top"] == 0)
+        check("resolve by display name", wd.resolve_monitor("Odyssey")["width"] == 5120)
+    finally:
+        wd._display_config_fetcher = real_fetcher
+
+
+def test_monitor_path_and_window_movement() -> None:
+    portal = _fresh()
+    mons = wd.monitors()
+    by_num = {m["number"]: m for m in mons}
+    # 1: Left (0, 1080), 2: Center (1080, 1080), 3: Top (2555, 0), 4: Right (6200, 1080)
+    check("path center -> left", wd.monitor_path(by_num[2], by_num[1], mons) == ["left"])
+    check("path center -> top", wd.monitor_path(by_num[2], by_num[3], mons) == ["up"])
+    check("path center -> right", wd.monitor_path(by_num[2], by_num[4], mons) == ["right"])
+    check("path left -> right crosses center",
+          wd.monitor_path(by_num[1], by_num[4], mons) == ["right", "right"])
+    check("path top -> left goes down then left",
+          wd.monitor_path(by_num[3], by_num[1], mons) == ["down", "left"])
+
+    portal.log.clear()
+    res = wd.move_window_to_monitor("monitor 1")
+    check("move_window_to_monitor target is 1",
+          res["monitor"]["number"] == 1 and res["steps"] == ["left"], str(res))
+    # Super (125) + Shift (42) + Left (105) followed by pointer move to center of monitor 1 (node 70, 540, 960)
+    check("sent Super+Shift+Left and centered pointer on monitor 1",
+          ("keycode", 125, True) in portal.log
+          and ("keycode", 42, True) in portal.log
+          and ("keycode", 105, True) in portal.log
+          and portal.log[-1] == ("move", 70, 540, 960),
+          str(portal.log))
+
+    portal.log.clear()
+    res2 = wd.move_window_to_monitor("4", from_monitor="1")
+    right_presses = sum(1 for e in portal.log if e == ("keycode", 106, True))
+    check("moving from monitor 1 to 4 presses Super+Shift+Right twice",
+          res2["steps"] == ["right", "right"]
+          and right_presses == 2
+          and portal.log[-1] == ("move", 73, 540, 960),
+          str(portal.log))
+
+
+def test_tiling_shell() -> None:
+    portal = _fresh()
+    check("parse <Super>Left", wd.parse_gtk_accelerator("<Super>Left") == ("super", "left"))
+    check("parse <Control><Super>Right",
+          wd.parse_gtk_accelerator("<Control><Super>Right") == ("ctrl", "super", "right"))
+    check("parse <Control><Super>period",
+          wd.parse_gtk_accelerator("<Control><Super>period") == ("ctrl", "super", "."))
+    check("parse <Shift><Alt><Super>Tab",
+          wd.parse_gtk_accelerator("<Shift><Alt><Super>Tab") == ("shift", "alt", "super", "tab"))
+
+    portal.log.clear()
+    r_tile = wd.tiling_shell_action("tile", "left")
+    check("tile left sends Super+Left",
+          r_tile["action"] == "move-window-left"
+          and ("keycode", 125, True) in portal.log
+          and ("keycode", 105, True) in portal.log,
+          str(portal.log))
+
+    portal.log.clear()
+    r_span = wd.tiling_shell_action("span", "right")
+    check("span right sends Ctrl+Super+Right",
+          r_span["action"] == "span-window-right"
+          and ("keycode", 29, True) in portal.log
+          and ("keycode", 125, True) in portal.log
+          and ("keycode", 106, True) in portal.log,
+          str(portal.log))
+
+    portal.log.clear()
+    r_all = wd.tiling_shell_action("span_all")
+    check("span_all sends Ctrl+Super+A",
+          r_all["action"] == "span-window-all-tiles"
+          and ("keycode", 30, True) in portal.log,
+          str(portal.log))
+
+    portal.log.clear()
+    r_untile = wd.tiling_shell_action("untile")
+    check("untile sends Super+U",
+          r_untile["action"] == "untile-window"
+          and ("keycode", 22, True) in portal.log,
+          str(portal.log))
+
+    portal.log.clear()
+    r_center = wd.tiling_shell_action("center")
+    check("center sends Ctrl+Alt+C",
+          r_center["action"] == "move-window-center"
+          and ("keycode", 46, True) in portal.log,
+          str(portal.log))
+
+    portal.log.clear()
+    r_combo = wd.tiling_shell_action("tile", "right", monitor="4")
+    check("tile with monitor moves to monitor 4 then tiles right",
+          r_combo["action"] == "move-window-right"
+          and r_combo.get("monitor") == 4
+          and ("move", 73, 540, 960) in portal.log,
+          str(portal.log))
+
+
+def test_open_app_and_kill_app() -> None:
+    import subprocess
+    from core import appidentity
+    from actions import computer_control as cc
+    from actions import open_app as oa
+
+    portal = _fresh()
+    os.environ["XDG_SESSION_TYPE"] = "wayland"
+    try:
+        # 1. Test open_app on monitor 1 when app is already running
+        fake_match = appidentity.Match(pid=999991, name="spotify", score=100, is_self=False)
+        real_running = appidentity.running
+        real_focus = appidentity.focus
+        appidentity.running = lambda spoken, include_self=False: [fake_match] if "spotify" in spoken.lower() else []
+        appidentity.focus = lambda m: True
+        try:
+            portal.log.clear()
+            out = oa.open_app({"app_name": "Spotify", "monitor": "monitor 1", "tile": "left"})
+            check("open_app on monitor 1 returns done with monitor=1",
+                  "status=done" in out and "monitor=1" in out, out)
+            check("open_app moved pointer to monitor 1 and tiled left",
+                  ("move", 70, 540, 960) in portal.log
+                  and ("keycode", 105, True) in portal.log,
+                  str(portal.log))
+        finally:
+            appidentity.running = real_running
+            appidentity.focus = real_focus
+
+        # 2. Test kill_app and close_app on a real multi-process tree spawned by Python
+        sleep_bin = "/bin/sleep" if os.path.exists("/bin/sleep") else "/usr/bin/sleep"
+        if os.path.exists(sleep_bin):
+            # Spawn a parent shell that spawns a child sleep process
+            parent = subprocess.Popen(
+                ["/bin/sh", "-c", f"{sleep_bin} 60 & wait"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            import time
+            time.sleep(0.25)
+            matches = appidentity.running("sleep")
+            check("spawned sleep process is found by running('sleep') and not hidden as self",
+                  any(not m.is_self for m in matches), str(matches))
+
+            res_kill = cc.computer_control({"action": "kill_app", "app_name": "sleep"})
+            parent.wait(timeout=2)
+            check("kill_app killed all sleep processes",
+                  "status=done" in res_kill and not appidentity.is_running(parent.pid),
+                  res_kill)
+
+            # Also test close_app on a process tree with children
+            parent2 = subprocess.Popen(
+                ["/bin/sh", "-c", f"{sleep_bin} 60 & wait"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            time.sleep(0.25)
+            res_close = cc.computer_control({"action": "close_app", "app_name": "sleep"})
+            parent2.wait(timeout=2)
+            check("close_app closed all sleep processes",
+                  "status=done" in res_close and not appidentity.is_running(parent2.pid),
+                  res_close)
+
+            # Also verify self-protection refuses to kill python
+            res_self = cc.computer_control({"action": "kill_app", "app_name": "python"})
+            check("kill_app refuses to kill the assistant itself",
+                  "status=failed" in res_self and "assistant" in res_self,
+                  res_self)
+
+        # 3. Test computer_control tile_window and move_window_to_monitor
+        portal.log.clear()
+        res_tile_cc = cc.computer_control({"action": "tile_window", "direction": "right"})
+        check("computer_control tile_window succeeds",
+              "status=done" in res_tile_cc and "move-window-right" in res_tile_cc,
+              res_tile_cc)
+
+        portal.log.clear()
+        res_mon_cc = cc.computer_control({"action": "move_window_to_monitor", "monitor": "3"})
+        check("computer_control move_window_to_monitor succeeds",
+              "status=done" in res_mon_cc and "monitor=3" in res_mon_cc,
+              res_mon_cc)
+    finally:
+        os.environ.pop("XDG_SESSION_TYPE", None)
+
+
 def main() -> int:
     wd.IDLE_CLOSE_S = 3600
     wd.missing = lambda: []             # the recorder needs neither package
-    for test in (test_keyboard_planning, test_monitors, test_pointer, test_keys,
-                 test_typing, test_capture, test_session_lifecycle, test_shim):
+    for test in (
+        test_keyboard_planning,
+        test_monitors,
+        test_pointer,
+        test_keys,
+        test_typing,
+        test_capture,
+        test_session_lifecycle,
+        test_shim,
+        test_gnome_display_config_and_monitor_resolution,
+        test_monitor_path_and_window_movement,
+        test_tiling_shell,
+        test_open_app_and_kill_app,
+    ):
         test()
     wd.release()
     wd._factory = wd._Portal
