@@ -634,7 +634,10 @@ def confirmation(args: dict) -> Optional[tuple[str, str]]:
         detail = f"Remove {_label(ev)} from your calendar."
         if guests:
             detail += f" Google will tell {len(guests)} guest(s) it is cancelled."
-        return f"Delete event {(ev.get('summary') or '')[:50]}", detail
+        # The event's name goes only in the detail, which is shown on the
+        # banner to the user. The title is also repeated to the model, and an
+        # event's name can be written by someone else.
+        return "Delete a calendar event", detail
     if action == "create":
         guests = _emails(args)
         if guests:

@@ -279,6 +279,9 @@ def test_delete() -> None:
     out = _run(action="delete", event="dentist")
     check("delete asks first", out.startswith("[ASKED]") and "Dentist" in out and "Tomorrow" in out, out)
     check("nothing deleted before the click", not any(c[0] == "delete" for c in g.calls))
+    title = ask_first.describe("google_calendar", {"action": "delete", "event": "gym", "date": "tomorrow"})
+    check("event name kept out of the banner title", title and "Gym" not in title[0]
+          and "Gym" in title[1], str(title))
     out = _confirm()
     check("deleted after the click", out.startswith("Deleted 'Dentist'")
           and not any(e["summary"] == "Dentist" for e in g.events["me@example.com"].values()), out)
