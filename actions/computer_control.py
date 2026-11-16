@@ -515,8 +515,16 @@ def _tiling_shell(
     act = (tiling_action or "tile").strip().lower().replace("-", "_")
     d = (direction or "").strip().lower()
     if act in ("move_to_monitor", "move_window_to_monitor", "monitor"):
-        move_dir = d if d in ("left", "right", "up", "down") else "right"
-        pyautogui.hotkey("super", "shift", move_dir)
+        # Without the Wayland portal there is no monitor layout to plan a path
+        # through, so only a direction can be honoured.
+        if d not in ("left", "right", "up", "down"):
+            return outcome.failed(
+                "tiling_shell",
+                "moving to a numbered monitor needs the Wayland desktop "
+                "session; say left, right, up or down instead",
+                monitor=monitor or None,
+            )
+        pyautogui.hotkey("super", "shift", d)
     elif act in ("span", "span_window") and d in ("left", "right", "up", "down"):
         pyautogui.hotkey("ctrl", "super", d)
     elif act in ("span_all", "span_all_tiles"):

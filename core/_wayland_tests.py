@@ -600,6 +600,76 @@ def test_window_actions_are_safe() -> None:
         os.environ.pop("XDG_SESSION_TYPE", None)
 
 
+def test_open_app_placement_is_honest() -> None:
+    from core import appidentity
+    from actions import computer_control as cc
+    from actions import open_app as oa
+
+    portal = _fresh()
+    os.environ["XDG_SESSION_TYPE"] = "wayland"
+    real = (appidentity.running, appidentity.focus, appidentity.wait_for_launch,
+            appidentity.snapshot, wd.tiling_shell_action, cc._on_wayland)
+    try:
+        app = appidentity.Match(pid=999993, name="spotify", score=100, is_self=False)
+
+        # Already running, but the tile step fails: not reported as done.
+        appidentity.running = lambda spoken, include_self=False: [app]
+        appidentity.focus = lambda m: True
+        def broken(*a, **k):
+            raise wd.DesktopError("no such shortcut")
+        wd.tiling_shell_action = broken
+        out = oa.open_app({"app_name": "Spotify", "tile": "left"})
+        check("a failed tile on a running app is reported, not done",
+              "status=unverified" in out and "no such shortcut" in out, out)
+        wd.tiling_shell_action = real[4]
+
+        # Freshly launched, but its window cannot be focused: no tile shortcut.
+        appidentity.focus = lambda m: False
+        appidentity.wait_for_launch = lambda spoken, before, timeout=0: app
+        said = []
+        class Player:
+            def request_say(self, text): said.append(text)
+            def write_log(self, text): pass
+        real_launcher = oa._LAUNCHERS[oa._SYSTEM]
+        oa._LAUNCHERS[oa._SYSTEM] = lambda name: True
+        portal.log.clear()
+        try:
+            oa._launch_and_verify(Player(), "Spotify", "spotify", set(), None, "left")
+        finally:
+            oa._LAUNCHERS[oa._SYSTEM] = real_launcher
+        check("a launched app that cannot be focused is not tiled",
+              not any(e[0] == "keycode" for e in portal.log)
+              and said and "not tiled" in said[0],
+              str(portal.log) + str(said))
+
+        # Without the Wayland session a numbered monitor is refused, not guessed.
+        cc._on_wayland = lambda: False
+        sent = []
+        class FakeGui:
+            def hotkey(self, *keys): sent.append(keys)
+        real_gui = cc.__dict__.get("pyautogui")
+        cc.pyautogui = FakeGui()
+        real_req = cc._require_pyautogui
+        cc._require_pyautogui = lambda: None
+        try:
+            out = cc.computer_control({"action": "move_window_to_monitor", "monitor": "3"})
+            check("non-Wayland move to a numbered monitor fails and presses nothing",
+                  "status=failed" in out and not sent, out + str(sent))
+            out = cc.computer_control({"action": "move_window_to_monitor", "direction": "left"})
+            check("non-Wayland move by direction uses that direction",
+                  sent == [("super", "shift", "left")], str(sent))
+        finally:
+            cc._require_pyautogui = real_req
+            if real_gui is None:
+                cc.__dict__.pop("pyautogui", None)
+            else:
+                cc.pyautogui = real_gui
+    finally:
+        (appidentity.running, appidentity.focus, appidentity.wait_for_launch,
+         appidentity.snapshot, wd.tiling_shell_action, cc._on_wayland) = real
+        os.environ.pop("XDG_SESSION_TYPE", None)
+
+
 def main() -> int:
     wd.IDLE_CLOSE_S = 3600
     wd.missing = lambda: []             # the recorder needs neither package
@@ -617,6 +687,7 @@ def main() -> int:
         test_tiling_shell,
         test_open_app_and_kill_app,
         test_window_actions_are_safe,
+        test_open_app_placement_is_honest,
     ):
         test()
     wd.release()

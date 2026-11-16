@@ -235,14 +235,20 @@ def _launch_and_verify(
                 try:
                     from core import wayland_desktop
                     time.sleep(0.6)
-                    appidentity.focus(appeared)
+                    focused = appidentity.focus(appeared)
                     if target_mon is not None:
                         wayland_desktop.use_monitor(target_mon["number"])
                         wayland_desktop.move_to(
                             target_mon["width"] // 2, target_mon["height"] // 2
                         )
-                    if tile_spec:
+                    # Tiling is a global shortcut on whatever window is in
+                    # front, so it is only sent once the new app is in front.
+                    if tile_spec and focused:
                         wayland_desktop.tiling_shell_action("tile", tile_spec)
+                    elif tile_spec:
+                        _say(player, f"[SYSTEM] {appeared.label} opened, but its "
+                             "window could not be brought to the front, so it "
+                             "was not tiled. Tell the user briefly.")
                 except Exception as exc:
                     print(f"[open_app] post-launch monitor/tile step failed: {exc}")
             mon_note = f" on monitor {target_mon['number']}" if target_mon else ""
@@ -315,6 +321,7 @@ def open_app(parameters=None, response=None, player=None,
         best = existing[0]
         for candidate in existing[:8]:
             if appidentity.focus(candidate):
+                placement_error = ""
                 if _on_wayland() and (target_mon is not None or tile_spec):
                     try:
                         from core import wayland_desktop
@@ -328,8 +335,17 @@ def open_app(parameters=None, response=None, player=None,
                             wayland_desktop.tiling_shell_action("tile", tile_spec)
                     except Exception as exc:
                         print(f"[open_app] move/tile focused window failed: {exc}")
+                        placement_error = str(exc)
                 mon_num = target_mon["number"] if target_mon else (monitor_spec or None)
                 _log(player, f"VISION: {candidate.label} brought to the front.")
+                if placement_error:
+                    return outcome.unverified(
+                        "open_app",
+                        f"it was brought to the front, but moving or tiling it "
+                        f"failed: {placement_error}",
+                        app=spoken, matched=candidate.label,
+                        already_running=True, focused=True,
+                    )
                 return outcome.done(
                     "open_app", app=spoken, matched=candidate.label,
                     monitor=mon_num, tile=tile_spec or None,
