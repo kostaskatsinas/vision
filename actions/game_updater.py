@@ -8,7 +8,6 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
-from config import get_os
 
 
 _KNOWN_APPIDS: dict[str, tuple[str, str]] = {

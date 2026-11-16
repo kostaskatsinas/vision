@@ -1,9 +1,6 @@
 #web_search.py
-import json
-import sys
 import threading
 import time
-from pathlib import Path
 
 # ── Gemini grounding quota circuit breaker ────────────────────────────────────
 # The google_search grounding tool has its own small quota, separate from plain
@@ -63,19 +60,11 @@ def _run_bounded(fn, timeout: float, label: str = "task"):
         print(f"[WebSearch] {label} exceeded {timeout:.0f}s — moving on")
     return box[0]
 
-def _get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+from core.paths import base_dir as _get_base_dir
 
 
 BASE_DIR        = _get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-
-
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
 
 
 def _gemini_search(query: str) -> str:

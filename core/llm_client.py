@@ -19,9 +19,7 @@ Supports two backends — selected via  "llm_provider"  in config/api_keys.json:
 import json
 import re
 import subprocess
-import sys
 import time
-from pathlib import Path
 from typing import Callable, Generator
 
 import requests
@@ -30,10 +28,7 @@ import requests
 # Avoids splitting on decimals (3.5) because those have no space after the dot.
 _SENT_END = re.compile(r'(?<=[.!?])\s+|(?<=\n)\s*\n')
 
-def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+from core.paths import base_dir as get_base_dir
 
 
 BASE_DIR    = get_base_dir()

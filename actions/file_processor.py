@@ -16,23 +16,15 @@ Supported types:
   pptx    → summarize, extract_text, to_pdf
 """
 
-import os
 import re
 import json
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from datetime import datetime
 
 # Model choice, timeout and fallback ladder all live in core/gemini.py.
 from core import gemini
-
-def _get_api_key() -> str:
-    config_path = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
-    with open(config_path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-
 
 def _gemini_client(tier: str = gemini.SMART):
     """Summarising documents and reading images — the reasoning tier, with a

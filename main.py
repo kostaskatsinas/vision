@@ -98,10 +98,7 @@ from core.wake_word            import (
 # again (wake-word mode only).
 WAKE_SLEEP_TIMEOUT = 120.0   # seconds (2 minutes)
 
-def get_base_dir():
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent
+from core.paths import base_dir as get_base_dir, read_gemini_api_key
 
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
@@ -332,8 +329,7 @@ def _render_prompt(template: str, values: dict) -> str:
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    return read_gemini_api_key(API_CONFIG_PATH)
 
 
 def _gemini_usable() -> bool:
@@ -1586,6 +1582,187 @@ class VisionLive:
 
         return out
 
+    # ── Tools ────────────────────────────────────────────────────────────────
+    # _execute_tool below is the one entry point. It answers a tool call from
+    # one of three places, tried in this order: the tools tied to this live
+    # session (the _tool_* methods), the file-backed actions (actions/*.py) and
+    # the plugins (plugins/*.py). Each helper returns the text the model is
+    # given as the tool's result; an exception is reported by _execute_tool.
+
+    def _inline_tools(self) -> dict:
+        """The tools that live in this file, by name. They win over an action
+        or a plugin that happens to carry the same name."""
+        return {
+            "recall_memory":   self._tool_recall_memory,
+            "undo":            self._tool_undo,
+            "screen_process":  self._tool_screen_process,
+            "close_camera":    self._tool_close_camera,
+            "system_status":   self._tool_system_status,
+            "manage_monitor":  self._tool_manage_monitor,
+            "shutdown_vision": self._tool_shutdown_vision,
+        }
+
+    async def _tool_recall_memory(self, args: dict) -> str:
+        # Local file search: no network, no second model. Kept out of the
+        # executor deliberately — it is a dictionary scan over a few hundred
+        # short strings, and a thread hop would cost more than the work itself.
+        return search_memory(args.get("query", ""), limit=8)
+
+    async def _tool_undo(self, args: dict) -> str:
+        if str(args.get("action", "")).lower().strip() == "list":
+            items = undo_stack.history()
+            return ("Things I can undo, most recent first:\n"
+                    + "\n".join(f"{i+1}. {t}" for i, t in enumerate(items))
+                    ) if items else "I have not changed anything I can undo yet."
+        return await asyncio.get_event_loop().run_in_executor(None, undo_stack.undo_last)
+
+    async def _tool_screen_process(self, args: dict) -> str:
+        loop = asyncio.get_event_loop()
+        _now = time.monotonic()
+        _cooldown = 4.0  # seconds — covers echo window after speaking ends
+        if self._vision_busy or (_now - self._vision_last_time) < _cooldown:
+            _wait = max(0, _cooldown - (_now - self._vision_last_time))
+            print(f"[Vision] ⏳ Cooldown active ({_wait:.1f}s remaining) — ignoring duplicate call")
+            return "Vision is still processing the previous request. I will not call this again."
+        self._vision_busy      = True
+        self._vision_last_time = _now
+        angle     = args.get("angle", "screen").lower()
+        user_text = args.get("text", "What do you see?")
+        if angle == "camera":
+            img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
+            self.ui.start_camera_stream()
+            self._vision_cam_active = True
+            print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
+            _stall = "camera"
+        else:
+            img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
+            print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
+            _stall = "screen"
+        self._pending_vision = (img_b, mime_t, user_text, angle)
+        # The image is attached to this same exchange, so there is nothing to
+        # stall for and nothing to announce. Asking for an acknowledgement here
+        # is what produced two spoken answers — the model filled that turn by
+        # answering the question from imagination, then answered it again once
+        # it could see.
+        return (
+            f"[VISION_ACTIVE] {_stall.capitalize()} captured and attached to this "
+            f"same exchange. Do not acknowledge and do not answer yet — the image "
+            f"is arriving with this result. Reply once, from what you actually see "
+            f"in it."
+        )
+
+    async def _tool_close_camera(self, args: dict) -> str:
+        self.ui.stop_camera_stream()
+        return "Camera closed."
+
+    async def _tool_system_status(self, args: dict) -> str:
+        r = await asyncio.get_event_loop().run_in_executor(None, get_system_status)
+        return str(r)
+
+    async def _tool_manage_monitor(self, args: dict) -> str:
+        action = args.get("action", "").lower().strip()
+        topic  = args.get("topic", "").strip()
+        if action == "add" and topic:
+            return await asyncio.to_thread(add_monitor, topic)
+        if action == "remove" and topic:
+            return await asyncio.to_thread(remove_monitor, topic)
+        if action == "list":
+            topics = await asyncio.to_thread(list_monitors)
+            return ("Monitoring: " + ", ".join(topics)) if topics else "No topics are being monitored."
+        return "Specify action (add/remove/list) and a topic."
+
+    async def _tool_shutdown_vision(self, args: dict) -> str:
+        self.ui.write_log("SYS: Shutdown requested.")
+        self._keep_task(asyncio.create_task(self._shutdown_after_goodbye()))
+        return "Done."
+
+    async def _shutdown_after_goodbye(self) -> None:
+        # The goodbye is said while the summary is written, and the process
+        # ends once the goodbye has been HEARD — a fixed 1.5 s from sending
+        # used to cut it off mid-word.
+        await asyncio.gather(self._say_goodbye(), self._wrap_up())
+        self._stop_engines()
+        _exit_process(0)
+
+    async def _say_goodbye(self) -> None:
+        if not self.session:
+            return
+        try:
+            if self._turn_done_event:
+                self._turn_done_event.clear()
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text": "Say a brief natural goodbye to the user."}]},
+                turn_complete=True,
+            )
+            if self._turn_done_event:
+                await asyncio.wait_for(self._turn_done_event.wait(), timeout=8.0)
+            deadline = time.monotonic() + 6.0
+            while time.monotonic() < deadline:
+                with self._speaking_lock:
+                    if not self._is_speaking:
+                        break
+                await asyncio.sleep(0.2)
+            await asyncio.sleep(0.4)
+        except Exception:
+            await asyncio.sleep(1.5)
+
+    def _apply_upload_defaults(self, name: str, args: dict) -> None:
+        """Fill in what the upload box implies, in place, before an action runs."""
+        # file_processor: fall back to the currently-uploaded file when none is given
+        if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
+            args["file_path"] = self.ui.current_file
+        # dev_agent: a folder in the upload box is where the work goes.
+        #
+        # Decided HERE, not left to the model. Told plainly in the tool
+        # description, it still answered "create a quiz plugin" with
+        # mode='build' — a brand-new project in Desktop/VisionProjects,
+        # nowhere near the folder the user had just handed it. Somebody
+        # who loads a folder and asks for something means "in this
+        # folder", so every coding request goes there; clearing the
+        # upload box (✕) is how to ask for a separate new project.
+        if (name == "dev_agent" and not args.get("folder")
+                and self.ui.current_file
+                and Path(self.ui.current_file).is_dir()
+                and str(args.get("mode") or "").lower() != "status"):
+            args["folder"] = self.ui.current_file
+            args["mode"] = "improve"
+
+    def _show_search_results(self, args: dict, r: str) -> None:
+        """web_search: mirror results to the on-screen content panel."""
+        if (not r or r.startswith("No results")
+                or r.startswith("Search failed")):
+            return
+        _mode  = args.get("mode", "search")
+        _query = args.get("query") or ", ".join(args.get("items", []))
+        _label = f"{_mode.upper()} — {_query[:38]}" if _query else _mode.upper()
+        # unwrap: the untrusted markers are for the MODEL. Showing them to the
+        # person who asked for the search is the machinery leaking into the
+        # interface.
+        self.ui.show_content(_label, outcome.unwrap(r))
+
+    async def _run_action_tool(self, name: str, args: dict) -> str:
+        """Run a file-backed action (actions/*.py) behind the ask-first gate."""
+        self._apply_upload_defaults(name, args)
+        _ctx = {"player": self.ui, "speak": self.speak,
+                "response": None, "session_memory": None}
+        r = await asyncio.get_event_loop().run_in_executor(None, lambda: ask_first.guard(
+            name, args,
+            lambda: self._action_registry.run(name, args, _ctx)))
+        if name == "web_search":
+            self._show_search_results(args, r)
+        return r or "Done."
+
+    async def _run_plugin_tool(self, name: str, args: dict) -> str:
+        """Run a plugin (plugins/*.py) behind the ask-first gate."""
+        r = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: ask_first.guard(
+                name, args,
+                lambda: self._plugin_registry.run(name, args, player=self.ui, session_memory=None),
+                is_plugin=True)
+        )
+        return r or "Done."
+
     async def _execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name
         args = dict(fc.args or {})
@@ -1609,164 +1786,16 @@ class VisionLive:
                 response={"result": "ok", "silent": True}
             )
 
-        loop   = asyncio.get_event_loop()
-        result = "Done."
-
         try:
-            if name == "recall_memory":
-                # Local file search: no network, no second model. Kept out of
-                # the executor deliberately — it is a dictionary scan over a few
-                # hundred short strings, and a thread hop would cost more than
-                # the work itself.
-                result = search_memory(args.get("query", ""), limit=8)
-
-            elif name == "undo":
-                if str(args.get("action", "")).lower().strip() == "list":
-                    items = undo_stack.history()
-                    result = ("Things I can undo, most recent first:\n"
-                              + "\n".join(f"{i+1}. {t}" for i, t in enumerate(items))
-                              ) if items else "I have not changed anything I can undo yet."
-                else:
-                    result = await loop.run_in_executor(None, undo_stack.undo_last)
-
-            elif name == "screen_process":
-                import time as _t_mod
-                _now = _t_mod.monotonic()
-                _cooldown = 4.0  # seconds — covers echo window after speaking ends
-                if self._vision_busy or (_now - self._vision_last_time) < _cooldown:
-                    _wait = max(0, _cooldown - (_now - self._vision_last_time))
-                    print(f"[Vision] ⏳ Cooldown active ({_wait:.1f}s remaining) — ignoring duplicate call")
-                    result = "Vision is still processing the previous request. I will not call this again."
-                else:
-                    self._vision_busy      = True
-                    self._vision_last_time = _now
-                    angle     = args.get("angle", "screen").lower()
-                    user_text = args.get("text", "What do you see?")
-                    if angle == "camera":
-                        img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
-                        self.ui.start_camera_stream()
-                        self._vision_cam_active = True
-                        print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
-                        _stall = "camera"
-                    else:
-                        img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
-                        print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
-                        _stall = "screen"
-                    self._pending_vision = (img_b, mime_t, user_text, angle)
-                    # The image is attached to this same exchange, so there is
-                    # nothing to stall for and nothing to announce. Asking for an
-                    # acknowledgement here is what produced two spoken answers —
-                    # the model filled that turn by answering the question from
-                    # imagination, then answered it again once it could see.
-                    result = (
-                        f"[VISION_ACTIVE] {_stall.capitalize()} captured and attached to this "
-                        f"same exchange. Do not acknowledge and do not answer yet — the image "
-                        f"is arriving with this result. Reply once, from what you actually see "
-                        f"in it."
-                    )
-
-            elif name == "close_camera":
-                self.ui.stop_camera_stream()
-                result = "Camera closed."
-
-            elif name == "system_status":
-                r = await loop.run_in_executor(None, get_system_status)
-                result = str(r)
-
-            elif name == "manage_monitor":
-                action = args.get("action", "").lower().strip()
-                topic  = args.get("topic", "").strip()
-                if action == "add" and topic:
-                    result = await asyncio.to_thread(add_monitor, topic)
-                elif action == "remove" and topic:
-                    result = await asyncio.to_thread(remove_monitor, topic)
-                elif action == "list":
-                    topics = await asyncio.to_thread(list_monitors)
-                    result = ("Monitoring: " + ", ".join(topics)) if topics else "No topics are being monitored."
-                else:
-                    result = "Specify action (add/remove/list) and a topic."
-
-            elif name == "shutdown_vision":
-                self.ui.write_log("SYS: Shutdown requested.")
-                async def _do_shutdown():
-                    # The goodbye is said while the summary is written, and the
-                    # process ends once the goodbye has been HEARD — a fixed 1.5 s
-                    # from sending used to cut it off mid-word.
-                    async def _goodbye():
-                        if not self.session:
-                            return
-                        try:
-                            if self._turn_done_event:
-                                self._turn_done_event.clear()
-                            await self.session.send_client_content(
-                                turns={"role": "user", "parts": [{"text": "Say a brief natural goodbye to the user."}]},
-                                turn_complete=True,
-                            )
-                            if self._turn_done_event:
-                                await asyncio.wait_for(self._turn_done_event.wait(), timeout=8.0)
-                            deadline = time.monotonic() + 6.0
-                            while time.monotonic() < deadline:
-                                with self._speaking_lock:
-                                    if not self._is_speaking:
-                                        break
-                                await asyncio.sleep(0.2)
-                            await asyncio.sleep(0.4)
-                        except Exception:
-                            await asyncio.sleep(1.5)
-                    await asyncio.gather(_goodbye(), self._wrap_up())
-                    self._stop_engines()
-                    _exit_process(0)
-                self._keep_task(asyncio.create_task(_do_shutdown()))
-
+            inline = self._inline_tools().get(name)
+            if inline is not None:
+                result = await inline(args)
             elif self._action_registry.has(name):
-                # file_processor: fall back to the currently-uploaded file when none is given
-                if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
-                    args["file_path"] = self.ui.current_file
-                # dev_agent: a folder in the upload box is where the work goes.
-                #
-                # Decided HERE, not left to the model. Told plainly in the tool
-                # description, it still answered "create a quiz plugin" with
-                # mode='build' — a brand-new project in Desktop/VisionProjects,
-                # nowhere near the folder the user had just handed it. Somebody
-                # who loads a folder and asks for something means "in this
-                # folder", so every coding request goes there; clearing the
-                # upload box (✕) is how to ask for a separate new project.
-                if (name == "dev_agent" and not args.get("folder")
-                        and self.ui.current_file
-                        and Path(self.ui.current_file).is_dir()
-                        and str(args.get("mode") or "").lower() != "status"):
-                    args["folder"] = self.ui.current_file
-                    args["mode"] = "improve"
-                _ctx = {"player": self.ui, "speak": self.speak,
-                        "response": None, "session_memory": None}
-                r = await loop.run_in_executor(None, lambda: ask_first.guard(
-                    name, args,
-                    lambda: self._action_registry.run(name, args, _ctx)))
-                result = r or "Done."
-                # web_search: mirror results to the on-screen content panel
-                if (name == "web_search" and r
-                        and not r.startswith("No results")
-                        and not r.startswith("Search failed")):
-                    _mode  = args.get("mode", "search")
-                    _query = args.get("query") or ", ".join(args.get("items", []))
-                    _label = f"{_mode.upper()} — {_query[:38]}" if _query else _mode.upper()
-                    # unwrap: the untrusted markers are for the MODEL. Showing
-                    # them to the person who asked for the search is the
-                    # machinery leaking into the interface.
-                    self.ui.show_content(_label, outcome.unwrap(r))
-
+                result = await self._run_action_tool(name, args)
+            elif self._plugin_registry.has(name):
+                result = await self._run_plugin_tool(name, args)
             else:
-                if self._plugin_registry.has(name):
-                    r = await loop.run_in_executor(
-                        None,
-                        lambda: ask_first.guard(
-                            name, args,
-                            lambda: self._plugin_registry.run(name, args, player=self.ui, session_memory=None),
-                            is_plugin=True)
-                    )
-                    result = r or "Done."
-                else:
-                    result = f"Unknown tool: {name}"
+                result = f"Unknown tool: {name}"
 
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"

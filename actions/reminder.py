@@ -1,16 +1,9 @@
 import json
-import os
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-
-
-def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
 
 
 def _get_os() -> str:
