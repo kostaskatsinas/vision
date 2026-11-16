@@ -9,10 +9,7 @@ import time
 from pathlib import Path
 
 
-def get_base_dir():
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+from core.paths import base_dir as get_base_dir
 
 
 BASE_DIR         = get_base_dir()
@@ -24,11 +21,6 @@ from core import gemini
 
 MODEL_PLANNER    = gemini.SMART
 MODEL_WRITER     = gemini.SMART
-
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
-
 
 def _coding_provider() -> str:
     """The service chosen under ENGINE & PROVIDERS → CODING, or ''."""

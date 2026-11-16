@@ -59,10 +59,7 @@ except Exception:      # pragma: no cover — HUD must never die over cosmetics
     HoloAvatar = None
 
 
-def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+from core.paths import base_dir as _base_dir
 
 BASE_DIR   = _base_dir()
 CONFIG_DIR = BASE_DIR / "config"

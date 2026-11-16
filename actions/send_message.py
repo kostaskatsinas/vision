@@ -1,8 +1,6 @@
 import subprocess
-import sys
 import threading
 import time
-from pathlib import Path
 
 from core import outcome
 from core.lazyimport import LazyModule, installed
@@ -22,10 +20,6 @@ def _configure_pyautogui(module) -> None:
 pyautogui = LazyModule("pyautogui", _configure_pyautogui)
 pyperclip = LazyModule("pyperclip")
 
-def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
 
 def _require_pyautogui():
     if not _PYAUTOGUI:

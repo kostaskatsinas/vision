@@ -1,10 +1,6 @@
 #youtube_video.py
-import json
 import re
-import sys
-import time
 import subprocess
-import shutil
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote_plus
@@ -33,13 +29,9 @@ try:
 except ImportError:
     _TRANSCRIPT_OK = False
 
-from config import get_os
 
 
-def _get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+from core.paths import base_dir as _get_base_dir
 
 
 BASE_DIR        = _get_base_dir()
@@ -55,11 +47,6 @@ HEADERS = {
 }
 
 _YT_VIDEO_FILTER = "EgIQAQ%3D%3D"
-
-
-def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
 
 
 def _open_url(url: str) -> None:

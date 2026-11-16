@@ -4,7 +4,6 @@ import json
 import re
 import string
 import subprocess
-import sys
 import time
 import random
 from pathlib import Path
@@ -28,10 +27,7 @@ def _configure_pyautogui(module) -> None:
 pyautogui = LazyModule("pyautogui", _configure_pyautogui)
 pyperclip = LazyModule("pyperclip")
 
-def _base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+from core.paths import base_dir as _base_dir
 
 
 _BASE         = _base_dir()

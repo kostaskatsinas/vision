@@ -1,8 +1,6 @@
 #computer_settings.py
-import json
 import re
 import shutil
-import sys
 import time
 import subprocess
 import platform
@@ -28,17 +26,6 @@ from core import confirm, outcome
 from core.undo import push_undo
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
-
-
-def _get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
-
-def _get_api_key() -> str:
-    path = _get_base_dir() / "config" / "api_keys.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
 
 # ── Volume ───────────────────────────────────────────────────────────────────
 # "Turn it up by 30", "set it to 100", "a bit quieter": the level is read and
