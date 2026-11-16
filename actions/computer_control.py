@@ -460,59 +460,95 @@ def _close_app(app_name: str, confirmed_index: int | None = None) -> str:
     )
 
 
-def _screen_find(description: str) -> tuple[int, int] | None:
+def _parse_box(text: str, full_w: int, full_h: int) -> tuple[int, int] | None:
+    """Centre, in screen pixels, of the box a model gave as
+    [ymin, xmin, ymax, xmax] on a 0-1000 scale. None for an answer that is not
+    such a box or lies off the screen."""
+    inside = re.search(r"\[([^\]]*)\]", text)          # "box_2d: [..]" has a 2 outside
+    nums = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", inside.group(1) if inside else text)[:4]]
+    if len(nums) < 4:
+        return None
+    ymin, xmin, ymax, xmax = nums
+    if not (0 <= ymin <= ymax <= 1000 and 0 <= xmin <= xmax <= 1000):
+        return None
+    x = round((xmin + xmax) / 2 / 1000 * full_w)
+    y = round((ymin + ymax) / 2 / 1000 * full_h)
+    return min(max(x, 0), full_w - 1), min(max(y, 0), full_h - 1)
+
+
+def _locate(description: str):
+    """((x, y), screenshot) for the element, or (None, screenshot)."""
     api_key = _get_api_key()
     if not api_key:
         print("[ComputerControl] ⚠️ No API key for screen_find")
-        return None
+        return None, None
 
     try:
-        from google import genai
         from google.genai import types as gtypes
 
         _require_pyautogui()
-        w, h  = pyautogui.size()
-        img   = pyautogui.screenshot()
+        full = pyautogui.screenshot()
+        full_w, full_h = full.size
+        img = full
         # Vision: a very wide screen (5120 px here) is shrunk before it is
-        # sent, and the answer scaled back. The model reads positions off the
-        # image it is given, so it is told that image's size.
-        full_w = w
-        if w > 2560:
-            ratio = 2560 / w
-            img   = img.resize((2560, max(1, round(h * ratio))))
-            w, h  = img.size
-        buf   = io.BytesIO()
+        # sent. The answer is asked for on Gemini's own 0-1000 scale, the
+        # way it is trained to give boxes: asked for pixels, it answered
+        # with x in pixels and y on that scale, 370 px off on the 5120x1440
+        # screen.
+        if full_w > 2560:
+            ratio = 2560 / full_w
+            img = full.resize((2560, max(1, round(full_h * ratio))))
+        buf = io.BytesIO()
         img.save(buf, format="PNG")
-        image_bytes = buf.getvalue()
 
         prompt = (
-            f"This is a screenshot of a {w}×{h} pixel screen. "
-            f"Locate the UI element described as: '{description}'. "
-            f"Reply with ONLY the center coordinates as: x,y "
-            f"If the element is not visible, reply: NOT_FOUND"
+            f"Find the UI element described as: '{description}'. "
+            "Reply with ONLY its bounding box as [ymin, xmin, ymax, xmax], "
+            "each value normalised to 0-1000 over the whole image. "
+            "If the element is not visible, reply: NOT_FOUND"
         )
 
         from core import gemini
         response = gemini.call(
-            [gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"), prompt],
+            [gtypes.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"), prompt],
             tier=gemini.FAST, timeout_ms=20_000,
         )
         if response is None:
-            return None
-
+            return None, full
         text = (response.text or "").strip()
         if "NOT_FOUND" in text.upper():
-            return None
-
-        match = re.search(r"(\d+)\s*,\s*(\d+)", text)
-        if match:
-            back = full_w / w
-            return round(int(match.group(1)) * back), round(int(match.group(2)) * back)
+            return None, full
+        coords = _parse_box(text, full_w, full_h)
+        if coords is None:
+            print(f"[ComputerControl] ⚠️ screen_find: unusable answer {text[:80]!r}")
+        return coords, full
 
     except Exception as e:
         print(f"[ComputerControl] ⚠️ screen_find failed: {e}")
+    return None, None
 
-    return None
+
+def _screen_find(description: str) -> tuple[int, int] | None:
+    return _locate(description)[0]
+
+
+def _changed_near(before, x: int, y: int, radius: int = 120) -> bool | None:
+    """Whether the screen around (x, y) looks different from `before`.
+    None when it cannot be told."""
+    try:
+        from PIL import ImageChops
+        after = pyautogui.screenshot()
+        if before is None or after.size != before.size:
+            return None
+        box = (max(0, x - radius), max(0, y - radius),
+               min(after.size[0], x + radius), min(after.size[1], y + radius))
+        diff = ImageChops.difference(before.convert("RGB").crop(box),
+                                     after.convert("RGB").crop(box))
+        return diff.getbbox() is not None
+    except Exception as e:
+        print(f"[ComputerControl] ⚠️ could not compare screenshots: {e}")
+        return None
+
 
 def computer_control(
     parameters: dict,
@@ -643,10 +679,16 @@ def computer_control(
 
         if action == "screen_click":
             desc   = params.get("description", "")
-            coords = _screen_find(desc)
+            coords, before = _locate(desc)
             if coords:
                 time.sleep(0.2)
                 _click(x=coords[0], y=coords[1])
+                time.sleep(0.6)
+                changed = _changed_near(before, coords[0], coords[1])
+                if changed is False:
+                    return (f"Clicked where '{desc}' seemed to be, at {coords}, but "
+                            f"nothing on screen changed there, so it may have missed. "
+                            f"Check before going on.")
                 return f"Clicked '{desc}' at {coords}"
             return f"Element not found on screen: '{desc}'"
 
