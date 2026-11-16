@@ -75,6 +75,14 @@ def _linux_session() -> str:
     return ""
 
 
+def _wayland_portal_ready() -> bool:
+    try:
+        from core import wayland_desktop
+        return wayland_desktop.available()
+    except Exception:
+        return False
+
+
 def detect() -> Support:
     """Work out what this machine permits. Never raises, never blocks.
 
@@ -95,6 +103,18 @@ def detect() -> Support:
             "No graphical session was found, so nothing on this machine can be "
             "typed, clicked, captured or focused. Voice, memory, files and the "
             "web still work."
+        )
+        return support
+
+    if session == "wayland" and _wayland_portal_ready():
+        # Vision: the desktop portal gives an approved program the screen, the
+        # pointer and the keyboard (core/wayland_desktop.py). Raising another
+        # program's window is still not possible; clicking it is.
+        support.can_focus_windows = False
+        support.notes.append(
+            "Wayland session: seeing the screen, the mouse and the keyboard go "
+            "through GNOME's remote desktop permission. GNOME asks once, and "
+            "shows its screen-sharing indicator while it is in use."
         )
         return support
 
