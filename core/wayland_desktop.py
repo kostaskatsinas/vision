@@ -527,10 +527,16 @@ def _grab(portal: _Portal, mon: dict):
     import PIL.Image
     fd = portal.pipewire_fd()
     w, h = mon["width"], mon["height"]
+    # The stream can be larger than the monitor's logical size (HiDPI or
+    # fractional scaling). Scaling to the logical size makes the bytes match
+    # what is decoded below, and keeps image pixels equal to click positions.
+    # At scale 1 videoscale passes the frame through untouched.
     try:
         cmd = ["gst-launch-1.0", "-q", "pipewiresrc", f"fd={fd}",
                f"path={mon['node']}", "num-buffers=1", "!", "videoconvert", "!",
-               "video/x-raw,format=RGBx", "!", "fdsink", "fd=1"]
+               "videoscale", "!",
+               f"video/x-raw,format=RGBx,width={w},height={h}", "!",
+               "fdsink", "fd=1"]
         proc = subprocess.run(cmd, pass_fds=(fd,), capture_output=True, timeout=10)
     finally:
         os.close(fd)
@@ -871,9 +877,16 @@ def pyautogui_shim() -> types.ModuleType:
             for key in message:
                 press(key)
         else:
-            note = type_text(str(message), interval=interval or 0.012)
-            if note:
-                print(f"[Wayland] ⚠️ {note}")
+            # Refuse before typing anything, rather than leave letters out of
+            # a message or form while the caller reports success.
+            text = str(message)
+            _, skipped = plan_text(text)
+            if skipped:
+                shown = "".join(dict.fromkeys(skipped))[:20]
+                raise DesktopError(
+                    f"nothing was typed: these characters have no key on this "
+                    f"desktop: {shown}")
+            type_text(text, interval=interval or 0.012)
         _pause()
 
     def _screenshot(imageFilename=None, region=None, *a, **kw):
