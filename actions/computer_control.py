@@ -538,15 +538,14 @@ def _cursor_box(x: int, y: int) -> tuple[int, int, int, int]:
     return (x - 16, y - 16, x + 72, y + 72)
 
 
-def _changed_near(before, x: int, y: int, old_pointer=None,
-                  radius: int = 120) -> bool | None:
-    """Whether the screen around (x, y) looks different from `before`.
-    None when it cannot be told.
+def _changed_near(before, x: int, y: int, radius: int = 120) -> bool | None:
+    """Whether the screen around (x, y) looks different from `before`, which
+    was taken with the pointer already resting at (x, y). None when it cannot
+    be told.
 
     Screenshots include the mouse pointer (on Wayland the portal draws it into
-    the frame), and the pointer moved to (x, y) for the click, so the area
-    under the pointer now and where it was before is left out. Otherwise a
-    missed click always looks like a change."""
+    the frame), and its shape can change on a click, so the area under it is
+    left out."""
     try:
         from PIL import ImageChops, ImageDraw
         after = pyautogui.screenshot()
@@ -556,8 +555,6 @@ def _changed_near(before, x: int, y: int, old_pointer=None,
         for img in imgs:
             draw = ImageDraw.Draw(img)
             draw.rectangle(_cursor_box(x, y), fill=(0, 0, 0))
-            if old_pointer:
-                draw.rectangle(_cursor_box(*old_pointer), fill=(0, 0, 0))
         box = (max(0, x - radius), max(0, y - radius),
                min(after.size[0], x + radius), min(after.size[1], y + radius))
         diff = ImageChops.difference(imgs[0].crop(box), imgs[1].crop(box))
@@ -696,16 +693,23 @@ def computer_control(
 
         if action == "screen_click":
             desc   = params.get("description", "")
-            coords, before = _locate(desc)
+            coords, _ = _locate(desc)
             if coords:
+                # The baseline for the missed-click check is taken with the
+                # pointer already on the spot, so the pointer and any hover
+                # effect are the same in both pictures. Wayland cannot say
+                # where the real pointer is, so an earlier picture could not
+                # be trusted.
+                before = None
                 try:
-                    old_pointer = tuple(pyautogui.position())
-                except Exception:
-                    old_pointer = None
-                time.sleep(0.2)
+                    pyautogui.moveTo(coords[0], coords[1])
+                    time.sleep(0.3)
+                    before = pyautogui.screenshot()
+                except Exception as e:
+                    print(f"[ComputerControl] ⚠️ no picture before the click: {e}")
                 _click(x=coords[0], y=coords[1])
                 time.sleep(0.6)
-                changed = _changed_near(before, coords[0], coords[1], old_pointer)
+                changed = _changed_near(before, coords[0], coords[1])
                 if changed is False:
                     return (f"Clicked where '{desc}' seemed to be, at {coords}, but "
                             f"nothing on screen changed there, so it may have missed. "
