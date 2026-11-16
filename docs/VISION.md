@@ -80,22 +80,48 @@ you how it went.
 
 ## Wayland
 
-Everything on the day-one list works on Wayland as is. Applications are
-launched through `gtk-launch` and `xdg-open`, which do not depend on the display
-server.
+Vision stays on Wayland. Upstream switches seeing the screen, the mouse and the
+keyboard off there, because pyautogui, mss and xdotool silently do nothing.
+`core/wayland_desktop.py` replaces them with GNOME's own door for this, the
+xdg-desktop-portal RemoteDesktop and ScreenCast interfaces:
 
-Upstream switches three abilities off when it detects a Wayland session
-(`core/platform_support.py`): typing and clicking in other applications,
-capturing the screen, and raising another application's window. The planned
-backend restores them:
-
-| Ability | Approach |
+| Ability | How |
 |---|---|
-| Typing and clicking | `ydotool`, which injects input through the kernel's uinput device and works on any compositor. Needs a one-time setup with root. |
-| Seeing the screen | The desktop's screenshot portal (`xdg-desktop-portal`), approved once by the user. |
-| Raising a window | Depends on the desktop: a KDE tool on Plasma, a small extension on GNOME. |
+| See the screen | One PipeWire stream per monitor; a frame is read with `gst-launch-1.0 pipewiresrc` |
+| Move, click, drag, scroll | `NotifyPointerMotionAbsolute`, `NotifyPointerButton`, `NotifyPointerAxisDiscrete` |
+| Type and shortcuts | `NotifyKeyboardKeysym` for text, `NotifyKeyboardKeycode` for keys and shortcuts |
 
-Logging in to an Xorg session is the fallback and needs no code.
+At startup `wayland_desktop.install()` registers a stand-in for the `pyautogui`
+module, so the existing actions work unchanged.
+
+**Permission.** The first use opens a GNOME dialog; tick the monitors and click
+Share. The approval is remembered in `~/.config/vision/portal_token` (delete it
+to be asked again). While Vision is using the screen or input, GNOME shows its
+orange screen-sharing indicator in the top bar, and its stop button ends the
+session. Vision also lets go by itself after 60 seconds without use.
+
+**When it acts.** Vision looks at the screen only when asked, and clicks or
+types only when asked in that request. It types the words dictated and does not
+press Enter unless told to. "Stop" or "hands off" releases everything
+(`computer_control` action `release`). Screenshots are sent to Gemini.
+
+**Several monitors.** Positions are on the working screen: the largest one
+until you say otherwise ("use the left screen", "use screen 3", "next screen").
+
+**Typing Greek.** GNOME only accepts a letter that the active keyboard layout
+holds, so Vision switches layout with Super+Space for Greek letters and
+switches back afterwards. Accented letters are typed as dead key plus letter.
+
+**Limits.**
+- If you move the mouse while Vision is clicking, the two fight over the
+  pointer. Vision places the pointer again right before pressing, but it cannot
+  read where the pointer really is.
+- Raising another program's window is not possible; clicking it is.
+- `VISION_NO_WAYLAND_DESKTOP=1` switches this off.
+
+Needs `jeepney` (in `requirements.txt`) and `gst-launch-1.0` with the PipeWire
+plugin (`sudo apt install gstreamer1.0-tools gstreamer1.0-pipewire` if absent).
+Tests that need no desktop: `python -m core._wayland_tests`.
 
 ## Models
 

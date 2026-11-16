@@ -27,6 +27,15 @@ try:
 except Exception as _e:
     print(f"[tls] not installed: {type(_e).__name__}")
 
+# ── Vision: screen, mouse and keyboard on Wayland ───────────────────────────
+# Must run before any action module imports pyautogui. core/wayland_desktop.py.
+try:
+    from core import wayland_desktop as _wayland_desktop
+    if _wayland_desktop.install():
+        print("[wayland] screen, mouse and keyboard go through the desktop portal")
+except Exception as _e:
+    print(f"[wayland] not installed: {type(_e).__name__}: {_e}")
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
