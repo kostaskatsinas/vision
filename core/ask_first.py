@@ -91,6 +91,11 @@ def describe(name: str, args: dict, is_plugin: bool = False) -> Optional[tuple[s
         from actions import google_calendar
         return google_calendar.confirmation(args)
 
+    if name == "cli_helper":
+        # Letting Claude Code or Gemini CLI create and edit files in a folder.
+        from actions import cli_helper
+        return cli_helper.confirmation(args)
+
     if is_plugin:
         low = name.lower()
         if any(word in low for word in _RISKY_PLUGIN_WORDS):

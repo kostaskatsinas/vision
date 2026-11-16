@@ -14,7 +14,8 @@ machine. The upstream documentation is in [`readme.md`](../readme.md).
 
 Steps 1 to 4 of the plan below are done: Vision runs on the target machine,
 asks before risky actions, reads and writes Google Calendar, and sees, clicks
-and types on Wayland. Step 5 (other models) is next.
+and types on Wayland. Step 5 is built: Claude Code and Gemini CLI work as
+background helpers, and a local model can be switched on (see Models).
 
 ## Target machine
 
@@ -82,6 +83,7 @@ you how it went.
 | `dev_agent` build or improve jobs (may `pip install` packages) | yes |
 | `google_calendar` with `action=delete` | yes, and the banner names the event |
 | `google_calendar` creating an event with attendees (Google emails them) | yes |
+| `cli_helper` with `access=write` (Claude Code or Gemini CLI may change files in a folder) | yes, and the banner names the folder |
 | Any plugin whose name contains send, mail, message, install or delete | yes |
 | Everything else | no |
 
@@ -189,8 +191,53 @@ Tests that need no desktop: `python -m core._wayland_tests`.
 | Offline fallback | A local model through Ollama, with Whisper and Piper for speech | The GPU fits a model of roughly 8 to 14 billion parameters. Weaker than Gemini at choosing the right tool. |
 
 Consumer Claude and Gemini subscriptions do not include API access, so they
-cannot power the live voice loop directly. The current terms and quotas for
-using each command line tool this way still need to be confirmed before step 5.
+cannot power the live voice loop directly. They do cover the command-line
+tools, which is how Vision uses them.
+
+### Helpers: Claude Code and Gemini CLI
+
+`actions/cli_helper.py` hands a long job to one of them in the background.
+Vision keeps talking and announces the answer when it is done; the full answer
+is shown on screen and saved in `~/.vision/helpers/`.
+
+| Say | What happens |
+|---|---|
+| "Ask Claude to explain how the wake word works in ~/vision" | Claude Code reads that folder and answers. No confirm. |
+| "Have Gemini compare these three laptops in detail" | Gemini CLI researches on the web. No confirm. |
+| "Ask Claude to add a README to ~/projects/demo" | Confirm banner first, naming the folder. Then it may create and edit files there. |
+| "How is the helper doing?" / "Stop the helper" | Status, or cancel. |
+
+What a helper is allowed to do is set by the flags Vision starts it with:
+
+| Level | Claude Code | Gemini CLI |
+|---|---|---|
+| read (default) | only `Read, Glob, Grep, WebSearch, WebFetch` exist | `--approval-mode default` |
+| write (after CONFIRM) | the same plus `Write, Edit`, with `acceptEdits` | `--approval-mode auto_edit` |
+
+Neither level allows shell commands, so a helper cannot delete files, install
+software or send anything. A write job is refused for your home folder itself,
+`~/.config`, `~/.ssh` and `~/.vision`. Jobs stop after 15 minutes unless you
+give another limit (at most 60), and two can run at once.
+
+Both tools must be signed in on this PC: run `claude` or `gemini` once in a
+terminal. Each job counts against that subscription's usage limits.
+
+### Local model (offline fallback)
+
+Upstream already speaks to Ollama; nothing in the fork is needed. It is not
+installed by default because it is a large download.
+
+1. Install Ollama (asks for your password):
+   `curl -fsSL https://ollama.com/install.sh | sh`
+2. Download a model that fits the 11 GB card with room to spare:
+   `ollama pull qwen3:8b` (about 5 GB; upstream was tested with it).
+3. In Vision open ⚙ → ENGINE & PROVIDERS, choose **Ollama**, pick the model,
+   and set it as the provider for background requests. Vision then falls back
+   to it when Gemini is out of quota or the internet is down.
+4. Optional, for a fully offline voice: in the same panel click the install
+   buttons for Whisper (hearing) and Piper (speaking), then choose MY OWN
+   SETUP. Expect slower answers and more mistakes in choosing tools than with
+   Gemini Live.
 
 ## Installing
 
