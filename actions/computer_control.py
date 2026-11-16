@@ -333,46 +333,18 @@ def _focus_window(title: str) -> str:
 
     return f"focus_window: unknown OS '{os_name}'"
 
-def _close_app(app_name: str, confirmed_index: int | None = None) -> str:
-    """Close the application the user named — that one, and never this one.
-
-    THE BUG THIS REPLACES
-        `computer_settings.close_app` was two lines:
-
-            if _OS == "Darwin": pyautogui.hotkey("command", "q")
-            else:               pyautogui.hotkey("alt", "f4")
-
-        No target. It sent Alt+F4 to whatever window had focus, and while
-        somebody is talking to the assistant the window with focus is very
-        often the assistant — which is why people reported that asking it to
-        close an app closed VISION itself. It also returned nothing at all, so
-        the model announced a success it had no information about.
-
-        The keystroke is not fixable by aiming it better. "The focused window"
-        is the wrong idea: the user named an application, so the application is
-        what should be found and asked to close.
-
-    HOW THIS ONE BEHAVES
-        * The name is matched against what is actually RUNNING — no list of
-          applications, so anything on any machine in any country works.
-        * The assistant's own process tree is never a candidate. When the only
-          thing matching is the assistant, that is said out loud rather than
-          obeyed.
-        * Two equally good matches is a question, not a coin toss. Closing the
-          wrong window loses somebody's unsaved work.
-        * It asks politely — WM_CLOSE on Windows, SIGTERM elsewhere — so an
-          application with unsaved changes gets to say so, and it NEVER
-          escalates to a kill.
-        * It then checks whether the process is gone, and answers `done` only
-          if it is.
-    """
+def _stop_app(app_name: str, confirmed_index: int | None = None,
+              force: bool = False) -> str:
+    """Stop or force-kill every process belonging to the application the user
+    named — never the assistant itself."""
+    action_label = "kill_app" if force else "close_app"
     app_name = (app_name or "").strip()
     if not app_name:
-        return outcome.failed("close_app", "no application name was given")
+        return outcome.failed(action_label, "no application name was given")
 
     if not appidentity._PSUTIL:
         return outcome.failed(
-            "close_app",
+            action_label,
             "psutil is not installed, so running applications cannot be found "
             "- run: pip install psutil",
             app=app_name,
@@ -387,23 +359,23 @@ def _close_app(app_name: str, confirmed_index: int | None = None) -> str:
         including_self = appidentity.running(app_name, include_self=True)
         if any(m.is_self for m in including_self):
             return outcome.failed(
-                "close_app",
+                action_label,
                 "the only thing matching that name is the assistant itself, "
                 "and it will not close itself - if the user really wants the "
                 "assistant closed they should close its window themselves",
                 app=app_name,
             )
         return outcome.failed(
-            "close_app",
+            action_label,
             "no running application matches that name - it may already be "
             "closed, or be running under a different name",
             app=app_name,
         )
 
     # Group by process NAME, because twenty `opera.exe` are one application
-    # with nineteen helpers, not twenty applications — and closing "Opera"
-    # means all of them. `matches` is already best-first, so insertion order
-    # here ranks the groups.
+    # with nineteen helpers, not twenty applications — and closing/killing
+    # "Opera" means all of them. `matches` is already best-first, so insertion
+    # order here ranks the groups.
     by_name: dict[str, list] = {}
     for match in matches:
         by_name.setdefault(match.label, []).append(match)
@@ -419,44 +391,161 @@ def _close_app(app_name: str, confirmed_index: int | None = None) -> str:
         best_score = group[0].score
         tied = [name for name, ms in ranked if ms[0].score == best_score]
         if len(tied) > 1:
+            verb = "killed" if force else "closed"
             return outcome.ask(
-                "close_app",
+                action_label,
                 f"more than one application matches '{app_name}' equally well: "
-                f"{', '.join(tied[:4])} - which one should be closed?",
+                f"{', '.join(tied[:4])} - which one should be {verb}?",
                 app=app_name, candidates=len(tied),
             )
-        print(f"[ComputerControl] close_app: '{app_name}' -> {target_name} "
+        print(f"[ComputerControl] {action_label}: '{app_name}' -> {target_name} "
               f"(also matched: {', '.join(n for n, _ in ranked[1:5])})")
 
-    closed, still_open, reason = 0, 0, ""
-    for match in group:
-        gone, detail = appidentity.request_close(match)
-        if gone:
-            closed += 1
-        else:
-            still_open += 1
-            reason = reason or detail
+    if force:
+        stopped, still_open, reason = appidentity.kill_app_processes(group)
+    else:
+        # close_app asks politely and never escalates: an app showing "save
+        # changes?" must not be killed under the user. kill_app is the explicit
+        # way to force it.
+        stopped, still_open, reason = appidentity.close_app_processes(
+            group, force_after=False
+        )
+        if still_open and stopped == 0:
+            reason = (reason + " - if the user wants it forced, use kill_app "
+                      "(unsaved work in it is lost)")
 
-    if closed and not still_open:
+    result_key = "killed" if force else "closed"
+    if stopped and not still_open:
         return outcome.done(
-            "close_app", app=app_name, closed=target_name,
-            processes=closed, verified=True,
+            action_label, app=app_name, **{result_key: target_name},
+            processes=stopped, verified=True,
         )
 
-    if closed and still_open:
-        # Partly gone. Common and benign for multi-process applications: the
-        # window is shut and a background helper is taking its time. Said as
-        # `unverified` because that is exactly what it is.
+    if stopped and still_open:
         return outcome.unverified(
-            "close_app",
-            f"{closed} of {closed + still_open} processes closed; the rest are "
-            f"still running - {reason}",
-            app=app_name, closed=target_name,
+            action_label,
+            f"{stopped} of {stopped + still_open} processes {result_key}; the "
+            f"rest are still running - {reason}",
+            app=app_name, **{result_key: target_name},
         )
 
     return outcome.failed(
-        "close_app", reason or "the application did not close",
+        action_label,
+        reason or f"the application could not be {result_key}",
         app=app_name, matched=target_name,
+    )
+
+
+def _close_app(app_name: str, confirmed_index: int | None = None) -> str:
+    """Find the application in the process table and terminate/kill all
+    processes belonging to it."""
+    return _stop_app(app_name, confirmed_index=confirmed_index, force=False)
+
+
+def _kill_app(app_name: str, confirmed_index: int | None = None) -> str:
+    """Find the application in the process table and immediately force-kill
+    (`SIGKILL`) all processes belonging to it."""
+    return _stop_app(app_name, confirmed_index=confirmed_index, force=True)
+
+
+def _focus_app_if_named(app_name: str) -> tuple[str | None, str]:
+    """If `app_name` is given, bring that running application's window to the
+    front before sending window-management or tiling shortcuts.
+
+    -> (label or None, error). An empty error with no label means no app was
+    named. A non-empty error means the app could not be focused, and the caller
+    must NOT send the shortcut: it would move whatever window has focus, which
+    is often the assistant's own.
+    """
+    app_name = (app_name or "").strip()
+    if not app_name:
+        return None, ""
+    candidates = appidentity.running(app_name)      # never the assistant
+    if not candidates:
+        return None, (f"no running application matches '{app_name}' - open it "
+                      "first with open_app")
+    for candidate in candidates[:8]:
+        if appidentity.focus(candidate):
+            time.sleep(0.2)
+            return candidate.label, ""
+    return None, (f"'{candidates[0].label}' is running but its window could not "
+                  "be brought to the front, so nothing was moved")
+
+
+def _int_param(value, default: int = 1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _tiling_shell(
+    tiling_action: str,
+    direction: str = "",
+    monitor: str = "",
+    app_name: str = "",
+    steps: int = 1,
+) -> str:
+    """Move, tile, span, center, untile or move a window across monitors using
+    GNOME Tiling Shell (`tilingshell@ferrarodomenico.com`) and GNOME monitor
+    shortcuts."""
+    focused, focus_error = _focus_app_if_named(app_name)
+    if focus_error:
+        return outcome.failed("tiling_shell", focus_error, app=app_name)
+    if _on_wayland():
+        from core import wayland_desktop
+        info = wayland_desktop.tiling_shell_action(
+            tiling_action,
+            direction=direction,
+            monitor=monitor if monitor else None,
+            steps=steps,
+        )
+        return outcome.done(
+            "tiling_shell",
+            window_action=info.get("action", tiling_action),
+            app=focused or (app_name or None),
+            direction=direction or None,
+            monitor=info.get("monitor") or (monitor or None),
+            steps=info.get("steps"),
+            verified=False,
+        )
+
+    # Non-Wayland fallback via pyautogui hotkeys
+    _require_pyautogui()
+    act = (tiling_action or "tile").strip().lower().replace("-", "_")
+    d = (direction or "").strip().lower()
+    if act in ("move_to_monitor", "move_window_to_monitor", "monitor"):
+        # Without the Wayland portal there is no monitor layout to plan a path
+        # through, so only a direction can be honoured.
+        if d not in ("left", "right", "up", "down"):
+            return outcome.failed(
+                "tiling_shell",
+                "moving to a numbered monitor needs the Wayland desktop "
+                "session; say left, right, up or down instead",
+                monitor=monitor or None,
+            )
+        pyautogui.hotkey("super", "shift", d)
+    elif act in ("span", "span_window") and d in ("left", "right", "up", "down"):
+        pyautogui.hotkey("ctrl", "super", d)
+    elif act in ("span_all", "span_all_tiles"):
+        pyautogui.hotkey("ctrl", "super", "a")
+    elif act in ("untile", "untile_window"):
+        pyautogui.hotkey("super", "u")
+    elif act in ("untile_all", "untile_all_windows"):
+        pyautogui.hotkey("shift", "super", "u")
+    elif act in ("center", "center_window"):
+        pyautogui.hotkey("ctrl", "alt", "c")
+    else:
+        tile_dir = d if d in ("left", "right", "up", "down") else "left"
+        for _ in range(max(1, int(steps or 1))):
+            pyautogui.hotkey("super", tile_dir)
+    return outcome.done(
+        "tiling_shell",
+        window_action=act,
+        app=focused or (app_name or None),
+        direction=direction or None,
+        monitor=monitor or None,
+        verified=False,
     )
 
 
@@ -735,6 +824,55 @@ def computer_control(
                 confirmed_index=params.get("confirmed"),
             )
 
+        if action in ("kill_app", "kill_application", "force_close", "force_quit", "kill"):
+            return _kill_app(
+                params.get("app_name") or params.get("text") or "",
+                confirmed_index=params.get("confirmed"),
+            )
+
+        if action in (
+            "move_window_to_monitor", "move_to_monitor", "window_to_monitor",
+            "send_to_monitor", "move_app_to_monitor",
+        ):
+            target_mon = (
+                params.get("monitor")
+                or params.get("screen")
+                or params.get("direction")
+                or params.get("text")
+                or ""
+            )
+            return _tiling_shell(
+                "move_to_monitor",
+                direction=str(params.get("direction") or ""),
+                monitor=str(target_mon),
+                app_name=str(params.get("app_name") or params.get("title") or ""),
+                steps=_int_param(params.get("amount"), 1),
+            )
+
+        if action in (
+            "tiling_shell", "tile_window", "tile", "move_tile", "move_window",
+            "snap_window", "span_window", "span_tile", "span", "span_all_tiles",
+            "span_all", "untile_window", "untile", "untile_all_windows",
+            "untile_all", "center_window", "center", "focus_tile",
+            "highlight_window", "cycle_layout", "next_layout", "prev_layout",
+            "layout_editor",
+        ):
+            sub_action = action
+            if action == "tiling_shell" and params.get("type"):
+                sub_action = str(params.get("type"))
+            elif action in ("tile_window", "move_window", "snap_window"):
+                sub_action = "tile"
+            elif action in ("span_window", "span_tile"):
+                sub_action = "span"
+            target_mon = params.get("monitor") or params.get("screen") or ""
+            return _tiling_shell(
+                sub_action,
+                direction=str(params.get("direction") or params.get("text") or ""),
+                monitor=str(target_mon),
+                app_name=str(params.get("app_name") or params.get("title") or ""),
+                steps=_int_param(params.get("amount"), 1),
+            )
+
         if action == "random_data":
             dt     = params.get("type", "name")
             result = _random_data(dt)
@@ -762,12 +900,26 @@ TOOL = {
     "name": "computer_control",
     "description": (
         "Direct computer control: type, click, hotkeys, scroll, move mouse, "
-        "screenshots, find elements on screen, and CLOSE an application. "
-        "Use action='close_app' with 'app_name' whenever the user asks to "
-        "close, quit or exit a program - 'close Spotify', 'quit Chrome'. "
-        "Always name the application in 'app_name'; there is no action that "
-        "closes 'whatever is in front', because that is usually the assistant. "
-        "To OPEN an application use the open_app tool instead. "
+        "screenshots, find elements on screen, CLOSE or KILL an application, "
+        "and MOVE / TILE windows with GNOME Tiling Shell or across monitors. "
+        "Use action='kill_app' or action='close_app' with 'app_name' whenever "
+        "the user asks to kill, close, quit or exit a program ('kill Spotify', "
+        "'close Chrome'). close_app asks the app and all its processes to quit "
+        "and never forces it, so an app asking to save changes stays open; "
+        "kill_app force-kills every process of the app at once (unsaved work is "
+        "lost), so use it only when the user says kill or force. Always name the "
+        "application in 'app_name'. "
+        "To move or tile windows with Tiling Shell, use action='tile_window' "
+        "(with direction='left'|'right'|'up'|'down'|'center'), "
+        "action='span_window' (extend across tiles in direction='left'|'right'|'up'|'down'|'all'), "
+        "action='span_all_tiles', action='center_window', action='untile_window', "
+        "action='untile_all_windows', action='focus_tile', action='cycle_layout', "
+        "or action='layout_editor'. To move a window to another monitor, use "
+        "action='move_window_to_monitor' with 'monitor' (or 'screen') set to "
+        "the monitor number (1, 2, 3, 4) or position (left, right, top, bottom, "
+        "main), and optionally 'app_name' to focus that app first. "
+        "To OPEN an application (including on a specific monitor) use the "
+        "open_app tool instead. "
         "Read the status the tool returns: 'done' means it was confirmed, "
         "'unverified' means it was requested and could NOT be confirmed - say "
         "so rather than claiming success - and 'ask' means nothing was done "
@@ -786,29 +938,34 @@ TOOL = {
     # Used in place of `description` only when a small model is on a tool
     # budget - Gemini still gets the full text. See providers/schema.py.
     "brief": (
-        "Controls the computer: type, click, hotkeys, scroll, screenshots, and close_app to close a named application (put its name in 'app_name'). Use open_app to open one."
+        "Controls the computer: type, click, hotkeys, scroll, screenshots, "
+        "close_app (asks to quit) / kill_app (forces) for a named application "
+        "('app_name'), tile_window / span_window / untile_window / "
+        "move_window_to_monitor to tile and move windows across monitors. "
+        "Use open_app to open an app (with optional 'monitor')."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | close_app | screen_find | screen_click | screens | use_screen | release | random_data | user_data"
+                "description": "type | smart_type | click | double_click | right_click | hotkey | press | scroll | move | copy | paste | screenshot | wait | clear_field | focus_window | close_app | kill_app | tile_window | span_window | span_all_tiles | center_window | untile_window | untile_all_windows | focus_tile | cycle_layout | layout_editor | move_window_to_monitor | screen_find | screen_click | screens | use_screen | release | random_data | user_data"
             },
             "app_name": {
                 "type": "STRING",
                 "description": (
-                    "For close_app: the application to close, named as the "
-                    "user said it. Any application running on the machine "
-                    "works - there is no fixed list. Never leave this empty."
+                    "For close_app / kill_app: the application to close or "
+                    "kill, named as the user said it. Also optional for "
+                    "tile_window / move_window_to_monitor to focus that "
+                    "application before moving/tiling its window."
                 )
             },
             "confirmed": {
                 "type": "BOOLEAN",
                 "description": (
-                    "For close_app: set true only after the tool asked which "
-                    "application was meant AND the user answered. Pass their "
-                    "answer in 'app_name'."
+                    "For close_app / kill_app: set true only after the tool "
+                    "asked which application was meant AND the user answered. "
+                    "Pass their answer in 'app_name'."
                 )
             },
             "text": {
@@ -833,11 +990,11 @@ TOOL = {
             },
             "direction": {
                 "type": "STRING",
-                "description": "up | down | left | right"
+                "description": "For scroll, tile_window, span_window, focus_tile: up | down | left | right | center | all | next | prev"
             },
             "amount": {
                 "type": "INTEGER",
-                "description": "Scroll amount (default: 3)"
+                "description": "Scroll amount (default: 3), or number of tile steps for tile_window (default: 1)"
             },
             "seconds": {
                 "type": "NUMBER",
@@ -869,7 +1026,11 @@ TOOL = {
             },
             "screen": {
                 "type": "STRING",
-                "description": "For use_screen: a screen number from action='screens', or left | right | top | bottom | main | next"
+                "description": "For use_screen or move_window_to_monitor: monitor number (1, 2, 3, 4) or left | right | top | bottom | main | next"
+            },
+            "monitor": {
+                "type": "STRING",
+                "description": "Target monitor for move_window_to_monitor or tile_window: monitor number (1, 2, 3, 4) or left | right | top | bottom | center | main"
             }
         },
         "required": [

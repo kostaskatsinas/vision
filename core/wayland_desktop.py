@@ -41,7 +41,9 @@ pipewire plugin, which GNOME desktops ship.
 from __future__ import annotations
 
 import ast
+from collections import deque
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -458,12 +460,137 @@ def is_active() -> bool:
 
 # ── Monitors ─────────────────────────────────────────────────────────────────
 
-def monitors() -> list[dict]:
-    """Every shared monitor, left to right then top to bottom, numbered from 1.
-    Identified by position: PipeWire node ids change with every session."""
-    streams = _run(lambda p: list(p.streams))
+def _unwrap_variant(val: Any) -> Any:
+    """Unwrap a jeepney `(signature, value)` D-Bus variant tuple if present."""
+    if isinstance(val, tuple) and len(val) == 2 and isinstance(val[0], str) and len(val[0]) <= 4:
+        return val[1]
+    return val
+
+
+def _parse_gnome_display_config(body: tuple) -> dict[tuple[int, int], dict]:
+    """Parse `org.gnome.Mutter.DisplayConfig.GetCurrentState` reply into a map
+    keyed by logical monitor `(left, top)` -> `{"ui_number": int, "primary": bool,
+    "connector": str, "display_name": str}`.
+
+    Matches `cc-display-config.c` in GNOME Settings -> Displays (`gnome-control-center`):
+    built-in displays are placed first, followed by external displays in the
+    order Mutter returns them, numbered 1..N.
+    """
+    if not isinstance(body, (tuple, list)) or len(body) < 3:
+        return {}
+    _, raw_monitors, raw_logical = body[0], body[1], body[2]
+    builtin_connectors: list[str] = []
+    external_connectors: list[str] = []
+    info_by_connector: dict[str, dict] = {}
+
+    for mon_entry in (raw_monitors or ()):
+        try:
+            spec, props = mon_entry[0], mon_entry[2]
+            connector = str(spec[0])
+            vendor = str(spec[1]) if len(spec) > 1 else ""
+            product = str(spec[2]) if len(spec) > 2 else ""
+            props = props if isinstance(props, dict) else {}
+            is_builtin = bool(_unwrap_variant(props.get("is-builtin", False)))
+            disp = str(_unwrap_variant(props.get("display-name", "")) or "")
+            label = " ".join(part for part in (disp, vendor, product) if part).strip()
+            info_by_connector[connector] = {
+                "connector": connector,
+                "display_name": label or disp or product,
+                "is_builtin": is_builtin,
+            }
+            if is_builtin:
+                builtin_connectors.append(connector)
+            else:
+                external_connectors.append(connector)
+        except Exception:
+            continue
+
+    ui_sorted = builtin_connectors + external_connectors
+    ui_numbers = {conn: idx + 1 for idx, conn in enumerate(ui_sorted)}
+
+    by_pos: dict[tuple[int, int], dict] = {}
+    for lm in (raw_logical or ()):
+        try:
+            x, y = int(lm[0]), int(lm[1])
+            primary = bool(lm[4])
+            specs = lm[5] or ()
+            connector = str(specs[0][0]) if specs else ""
+            meta = info_by_connector.get(connector, {})
+            by_pos[(x, y)] = {
+                "ui_number": ui_numbers.get(connector, 0),
+                "primary": primary,
+                "connector": connector,
+                "display_name": meta.get("display_name", ""),
+            }
+        except Exception:
+            continue
+    return by_pos
+
+
+def _query_gnome_display_config(portal: Any = None) -> dict[tuple[int, int], dict]:
+    """Query `org.gnome.Mutter.DisplayConfig.GetCurrentState` on the session bus
+    when running against the real portal."""
+    if portal is not None and not isinstance(portal, _Portal):
+        return {}
+    if not installed("jeepney"):
+        return {}
+    try:
+        from jeepney import DBusAddress, new_method_call
+        from jeepney.io.blocking import open_dbus_connection
+        addr = DBusAddress(
+            "/org/gnome/Mutter/DisplayConfig",
+            bus_name="org.gnome.Mutter.DisplayConfig",
+            interface="org.gnome.Mutter.DisplayConfig",
+        )
+        conn = open_dbus_connection("SESSION")
+        try:
+            reply = conn.send_and_get_reply(new_method_call(addr, "GetCurrentState"), timeout=1.5)
+            return _parse_gnome_display_config(reply.body)
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
+_display_config_fetcher = _query_gnome_display_config
+
+
+def _ordered(portal: _Portal) -> list[dict]:
+    """Order and number the portal's streams. When GNOME's DisplayConfig is
+    available and matches the stream positions, numbers match GNOME Settings ->
+    Displays (1..N); otherwise falls back to left-to-right, top-to-bottom."""
+    streams = list(portal.streams)
     ordered = sorted(streams, key=lambda s: (s["left"], s["top"]))
-    return [dict(s, number=i + 1) for i, s in enumerate(ordered)]
+    meta_by_pos = _display_config_fetcher(portal) or {}
+
+    enriched = []
+    for i, s in enumerate(ordered):
+        meta = meta_by_pos.get((s["left"], s["top"]), {})
+        entry = dict(s, number=i + 1)
+        if meta:
+            entry["primary"] = bool(meta.get("primary", False))
+            if meta.get("connector"):
+                entry["connector"] = meta["connector"]
+            if meta.get("display_name"):
+                entry["display_name"] = meta["display_name"]
+        enriched.append(entry)
+
+    # If GNOME DisplayConfig gave every stream a distinct 1..N UI number, use
+    # those exact numbers so "monitor 1..4" matches GNOME Settings -> Displays.
+    ui_nums = [meta_by_pos.get((s["left"], s["top"]), {}).get("ui_number", 0) for s in ordered]
+    if ui_nums and sorted(ui_nums) == list(range(1, len(ordered) + 1)):
+        for s, num in zip(enriched, ui_nums):
+            s["number"] = num
+        enriched.sort(key=lambda m: m["number"])
+
+    return enriched
+
+
+def monitors() -> list[dict]:
+    """Every shared monitor, numbered from 1 (matching GNOME Settings ->
+    Displays when available, else left to right then top to bottom).
+    Identified by position: PipeWire node ids change with every session."""
+    return _run(_ordered)
 
 
 def _working(mons: list[dict]) -> dict:
@@ -471,6 +598,9 @@ def _working(mons: list[dict]) -> dict:
         for m in mons:
             if (m["left"], m["top"]) == _monitor_key:
                 return m
+    primary = next((m for m in mons if m.get("primary")), None)
+    if primary is not None:
+        return primary
     return max(mons, key=lambda m: m["width"] * m["height"])
 
 
@@ -478,32 +608,96 @@ def working_monitor() -> dict:
     return _working(monitors())
 
 
-def use_monitor(which: Any) -> dict:
-    """Choose the working monitor: a number from `monitors()`, or one of
-    left / right / top / bottom / main / largest / next."""
-    global _monitor_key, _last_pos
-    mons = monitors()
-    word = str(which).strip().lower()
+_ORDINALS = {
+    "first": 1, "1st": 1, "one": 1,
+    "second": 2, "2nd": 2, "two": 2,
+    "third": 3, "3rd": 3, "three": 3,
+    "fourth": 4, "4th": 4, "four": 4,
+    "fifth": 5, "5th": 5, "five": 5,
+    "sixth": 6, "6th": 6, "six": 6,
+}
+
+
+def resolve_monitor(which: Any, mons: Optional[list[dict]] = None) -> dict:
+    """Resolve a monitor specifier (`1`, `'monitor 1'`, `'screen 2'`, `'left'`,
+    `'right'`, `'top'`, `'bottom'`, `'center'`, `'main'`, `'next'`, or connector
+    name) to a monitor dict from `monitors()`, without changing the active
+    working monitor."""
+    mons = mons if mons is not None else monitors()
+    if not mons:
+        raise DesktopError("no monitors are available in this session")
+
+    if isinstance(which, dict) and "left" in which and "top" in which:
+        for m in mons:
+            if (m["left"], m["top"]) == (which["left"], which["top"]):
+                return m
+        return which
+
+    raw = str(which if which is not None else "").strip().lower()
+    # Strip leading prefixes like "monitor 1", "screen #2", "display 3", "on monitor 1"
+    cleaned = re.sub(r"^(?:on\s+|to\s+)?(?:monitor|screen|display)\s*#?\s*", "", raw).strip()
+    word = cleaned or raw
+
     chosen = None
     if word.isdigit():
-        chosen = next((m for m in mons if m["number"] == int(word)), None)
+        num = int(word)
+        chosen = next((m for m in mons if m["number"] == num), None)
+    elif word in _ORDINALS:
+        num = _ORDINALS[word]
+        chosen = next((m for m in mons if m["number"] == num), None)
     elif word in ("main", "primary", "largest", "biggest", "default"):
-        chosen = max(mons, key=lambda m: m["width"] * m["height"])
-    elif word == "left":
+        chosen = (
+            next((m for m in mons if m.get("primary")), None)
+            or max(mons, key=lambda m: m["width"] * m["height"])
+        )
+    elif word in ("center", "centre", "middle", "ultrawide", "wide"):
+        chosen = (
+            next((m for m in mons if m.get("primary")), None)
+            or max(mons, key=lambda m: m["width"] * m["height"])
+        )
+    elif word in ("left", "leftmost"):
         chosen = min(mons, key=lambda m: m["left"])
-    elif word == "right":
+    elif word in ("right", "rightmost"):
         chosen = max(mons, key=lambda m: m["left"] + m["width"])
-    elif word in ("top", "upper", "up"):
+    elif word in ("top", "upper", "up", "topmost"):
         chosen = min(mons, key=lambda m: m["top"])
-    elif word in ("bottom", "lower", "down"):
+    elif word in ("bottom", "lower", "down", "bottommost"):
         chosen = max(mons, key=lambda m: m["top"] + m["height"])
     elif word == "next":
         current = _working(mons)
-        chosen = mons[current["number"] % len(mons)]
+        idx = next((i for i, m in enumerate(mons) if (m["left"], m["top"]) == (current["left"], current["top"])), 0)
+        chosen = mons[(idx + 1) % len(mons)]
+    elif word in ("prev", "previous"):
+        current = _working(mons)
+        idx = next((i for i, m in enumerate(mons) if (m["left"], m["top"]) == (current["left"], current["top"])), 0)
+        chosen = mons[(idx - 1) % len(mons)]
+    else:
+        if word:
+            chosen = next(
+                (m for m in mons
+                 if word == str(m.get("connector", "")).lower()
+                 or word in str(m.get("display_name", "")).lower()),
+                None,
+            )
+        if chosen is None:
+            m_num = re.search(r"\b(\d+)\b", word)
+            if m_num:
+                num = int(m_num.group(1))
+                chosen = next((m for m in mons if m["number"] == num), None)
+
     if chosen is None:
         raise DesktopError(
             f"there is no screen '{which}' - choose a number from 1 to "
             f"{len(mons)}, or left, right, top, bottom or main")
+    return chosen
+
+
+def use_monitor(which: Any) -> dict:
+    """Choose the working monitor: a number from `monitors()`, or one of
+    left / right / top / bottom / center / main / largest / next."""
+    global _monitor_key, _last_pos
+    mons = monitors()
+    chosen = resolve_monitor(which, mons)
     _monitor_key = (chosen["left"], chosen["top"])
     _last_pos = None
     return chosen
@@ -515,7 +709,8 @@ def describe_monitors() -> str:
     parts = []
     for m in mons:
         mark = " (in use)" if m is current or m["number"] == current["number"] else ""
-        parts.append(f"screen {m['number']}: {m['width']}x{m['height']} at "
+        extra = f" [{m['connector']}]" if m.get("connector") else ""
+        parts.append(f"screen {m['number']}{extra}: {m['width']}x{m['height']} at "
                      f"{m['left']},{m['top']}{mark}")
     return "; ".join(parts)
 
@@ -560,11 +755,6 @@ def screenshot(region: Optional[tuple[int, int, int, int]] = None):
         left, top, width, height = (int(v) for v in region)
         image = image.crop((left, top, left + width, top + height))
     return image
-
-
-def _ordered(portal: _Portal) -> list[dict]:
-    ordered = sorted(portal.streams, key=lambda s: (s["left"], s["top"]))
-    return [dict(s, number=i + 1) for i, s in enumerate(ordered)]
 
 
 def size() -> tuple[int, int]:
@@ -775,6 +965,434 @@ def type_text(text: str, interval: float = 0.012) -> str:
         shown = "".join(dict.fromkeys(skipped))[:20]
         return f"these characters have no key and were left out: {shown}"
     return ""
+
+
+# ── Window & Tiling Shell Management ─────────────────────────────────────────
+
+_GTK_MOD_MAP = {
+    "super": "super", "meta": "super", "mod4": "super", "hyper": "super",
+    "control": "ctrl", "ctrl": "ctrl", "primary": "ctrl",
+    "shift": "shift",
+    "alt": "alt", "mod1": "alt",
+}
+
+_GTK_KEY_MAP = {
+    "period": ".", "comma": ",", "slash": "/", "backslash": "\\",
+    "minus": "-", "equal": "=", "plus": "=", "grave": "`", "asciitilde": "`",
+    "bracketleft": "[", "bracketright": "]", "semicolon": ";", "apostrophe": "'",
+    "return": "enter", "kp_enter": "enter", "escape": "esc",
+    "prior": "pageup", "page_up": "pageup", "next": "pagedown", "page_down": "pagedown",
+    "iso_left_tab": "tab",
+}
+
+
+def parse_gtk_accelerator(accel: str) -> tuple[str, ...]:
+    """Parse a GTK accelerator string such as `'<Control><Super>Left'` or
+    `'<Super><Shift>Up'` into key names suitable for `hotkey(*keys)`."""
+    s = (accel or "").strip().strip("'\"")
+    if not s:
+        return ()
+    mods: list[str] = []
+    for raw_mod in re.findall(r"<([^>]+)>", s):
+        mapped = _GTK_MOD_MAP.get(raw_mod.strip().lower())
+        if mapped and mapped not in mods:
+            mods.append(mapped)
+    key_part = re.sub(r"<[^>]+>", "", s).strip().lower()
+    if not key_part:
+        return tuple(mods)
+    key_name = _GTK_KEY_MAP.get(key_part, key_part)
+    if key_name not in _KEYCODES:
+        return ()
+    return tuple(mods + [key_name])
+
+
+def _mon_pos(m: dict) -> tuple[int, int]:
+    return (int(m["left"]), int(m["top"]))
+
+
+def monitor_neighbor(mon: dict, direction: str, mons: list[dict]) -> Optional[dict]:
+    """Find the adjacent monitor in `direction` ('left', 'right', 'up', 'down')
+    from `mon` based on monitor geometry `(left, top, width, height)`.
+
+    Matches GNOME Mutter's `meta_monitor_manager_get_monitor_neighbor`: a
+    horizontal move ('left'/'right') requires vertical interval overlap, and a
+    vertical move ('up'/'down') requires horizontal interval overlap.
+    """
+    d = direction.strip().lower()
+    ax1, ay1 = int(mon["left"]), int(mon["top"])
+    ax2, ay2 = ax1 + int(mon["width"]), ay1 + int(mon["height"])
+    acx, acy = (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
+
+    overlapping: list[tuple[float, float, dict]] = []
+
+    for other in mons:
+        if _mon_pos(other) == _mon_pos(mon):
+            continue
+        bx1, by1 = int(other["left"]), int(other["top"])
+        bx2, by2 = bx1 + int(other["width"]), by1 + int(other["height"])
+        bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+
+        v_overlap = max(0, min(ay2, by2) - max(ay1, by1))
+        h_overlap = max(0, min(ax2, bx2) - max(ax1, bx1))
+
+        if d == "left" and bcx < acx and v_overlap > 0 and bx2 <= ax1 + 64:
+            edge_gap = max(0, ax1 - bx2)
+            center_dist = abs(acx - bcx) + abs(acy - bcy) * 0.5
+            overlapping.append((edge_gap, center_dist, other))
+        elif d == "right" and bcx > acx and v_overlap > 0 and bx1 >= ax2 - 64:
+            edge_gap = max(0, bx1 - ax2)
+            center_dist = abs(bcx - acx) + abs(acy - bcy) * 0.5
+            overlapping.append((edge_gap, center_dist, other))
+        elif d == "up" and bcy < acy and h_overlap > 0 and by2 <= ay1 + 64:
+            edge_gap = max(0, ay1 - by2)
+            center_dist = abs(acy - bcy) + abs(acx - bcx) * 0.5
+            overlapping.append((edge_gap, center_dist, other))
+        elif d == "down" and bcy > acy and h_overlap > 0 and by1 >= ay2 - 64:
+            edge_gap = max(0, by1 - ay2)
+            center_dist = abs(bcy - acy) + abs(acx - bcx) * 0.5
+            overlapping.append((edge_gap, center_dist, other))
+
+    if overlapping:
+        overlapping.sort(key=lambda item: (item[0], item[1]))
+        return overlapping[0][2]
+    return None
+
+
+def monitor_path(source: dict, target: dict,
+                 mons: Optional[list[dict]] = None) -> list[str]:
+    """Shortest sequence of `'left' | 'right' | 'up' | 'down'` monitor hops
+    from `source` monitor to `target` monitor."""
+    mons = mons if mons is not None else monitors()
+    start_pos = _mon_pos(source)
+    goal_pos = _mon_pos(target)
+    if start_pos == goal_pos or len(mons) <= 1:
+        return []
+
+    by_pos = {_mon_pos(m): m for m in mons}
+    queue: deque[tuple[tuple[int, int], list[str]]] = deque([(start_pos, [])])
+    visited = {start_pos}
+
+    while queue:
+        curr_pos, path = queue.popleft()
+        curr_mon = by_pos[curr_pos]
+        for d in ("left", "right", "up", "down"):
+            nxt = monitor_neighbor(curr_mon, d, mons)
+            if nxt is None:
+                continue
+            nxt_pos = _mon_pos(nxt)
+            if nxt_pos == goal_pos:
+                return path + [d]
+            if nxt_pos not in visited:
+                visited.add(nxt_pos)
+                queue.append((nxt_pos, path + [d]))
+
+    # Fallback direct vector if monitors are disjoint in a custom way
+    dx = (target["left"] + target["width"] / 2) - (source["left"] + source["width"] / 2)
+    dy = (target["top"] + target["height"] / 2) - (source["top"] + source["height"] / 2)
+    steps: list[str] = []
+    if abs(dx) >= abs(dy):
+        steps.append("right" if dx > 0 else "left")
+    else:
+        steps.append("down" if dy > 0 else "up")
+    return steps
+
+
+def _wm_monitor_move_hotkey(direction: str) -> tuple[str, ...]:
+    """Return the key chord for GNOME's `move-to-monitor-{left,right,up,down}`."""
+    d = direction.strip().lower()
+    default = ("super", "shift", d)
+    if not isinstance(_portal, _Portal):
+        return default
+    try:
+        out = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.wm.keybindings", f"move-to-monitor-{d}"],
+            capture_output=True, text=True, timeout=1.5,
+        ).stdout.strip()
+        for raw in ast.literal_eval(out.lstrip("@as ").strip()):
+            parsed = parse_gtk_accelerator(raw)
+            if parsed:
+                return parsed
+    except Exception:
+        pass
+    return default
+
+
+def move_window_to_monitor(which: Any, from_monitor: Any = None) -> dict:
+    """Move the currently focused window to monitor `which` (e.g. `1`, `'monitor 2'`,
+    `'left'`, `'right'`, `'top'`, `'main'`) using GNOME's monitor movement
+    shortcuts along the monitor layout graph, and place the pointer on that
+    monitor."""
+    global _monitor_key
+    mons = monitors()
+    target = resolve_monitor(which, mons)
+    if from_monitor is not None:
+        source = resolve_monitor(from_monitor, mons)
+    else:
+        source = _working(mons)
+
+    # Wayland does not tell us which monitor the focused window is on, so the
+    # source is the caller's best knowledge (the working monitor by default).
+    # When that already is the target, nothing is pressed: guessing another
+    # source here used to push a window that was already in place onto the
+    # next monitor.
+    steps = monitor_path(source, target, mons)
+
+    for i, step in enumerate(steps):
+        hotkey(*_wm_monitor_move_hotkey(step))
+        if i + 1 < len(steps):
+            time.sleep(0.12)
+
+    _monitor_key = _mon_pos(target)
+    move_to(target["width"] // 2, target["height"] // 2)
+    return {"monitor": target, "steps": steps}
+
+
+_TILINGSHELL_SCHEMA = "org.gnome.shell.extensions.tilingshell"
+_TILINGSHELL_SCHEMADIRS = (
+    Path.home() / ".local/share/gnome-shell/extensions/tilingshell@ferrarodomenico.com/schemas",
+    Path("/usr/share/gnome-shell/extensions/tilingshell@ferrarodomenico.com/schemas"),
+)
+
+# Map each Tiling Shell gsettings key to (default GTK accelerator, hotkey tuple).
+_TILINGSHELL_DEFAULTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "move-window-left": ("<Super>Left", ("super", "left")),
+    "move-window-right": ("<Super>Right", ("super", "right")),
+    "move-window-up": ("<Super>Up", ("super", "up")),
+    "move-window-down": ("<Super>Down", ("super", "down")),
+    "span-window-left": ("<Control><Super>Left", ("ctrl", "super", "left")),
+    "span-window-right": ("<Control><Super>Right", ("ctrl", "super", "right")),
+    "span-window-up": ("<Control><Super>Up", ("ctrl", "super", "up")),
+    "span-window-down": ("<Control><Super>Down", ("ctrl", "super", "down")),
+    "span-window-all-tiles": ("<Control><Super>a", ("ctrl", "super", "a")),
+    "untile-window": ("<Super>u", ("super", "u")),
+    "untile-all-windows": ("<Shift><Super>u", ("shift", "super", "u")),
+    "move-window-center": ("<Control><Alt>c", ("ctrl", "alt", "c")),
+    "focus-window-left": ("<Alt><Super>Left", ("alt", "super", "left")),
+    "focus-window-right": ("<Alt><Super>Right", ("alt", "super", "right")),
+    "focus-window-up": ("<Alt><Super>Up", ("alt", "super", "up")),
+    "focus-window-down": ("<Alt><Super>Down", ("alt", "super", "down")),
+    "focus-window-next": ("<Alt><Super>Tab", ("alt", "super", "tab")),
+    "focus-window-prev": ("<Shift><Alt><Super>Tab", ("shift", "alt", "super", "tab")),
+    "highlight-current-window": ("<Control><Super>h", ("ctrl", "super", "h")),
+    "cycle-layouts": ("<Control><Super>period", ("ctrl", "super", ".")),
+    "cycle-layouts-backward": ("<Control><Super>comma", ("ctrl", "super", ",")),
+}
+
+
+def _tilingshell_gsettings_cmd() -> list[str]:
+    cmd = ["gsettings"]
+    for d in _TILINGSHELL_SCHEMADIRS:
+        if d.is_dir():
+            cmd.extend(["--schemadir", str(d)])
+            break
+    return cmd
+
+
+def _ensure_tilingshell_shortcut(setting_key: str) -> tuple[str, ...]:
+    """Read the active shortcut for `setting_key` from Tiling Shell's schema,
+    or configure its default accelerator if unbound, and return the key chord
+    for `hotkey(*keys)`."""
+    default_accel, default_chord = _TILINGSHELL_DEFAULTS[setting_key]
+    if not isinstance(_portal, _Portal):
+        return default_chord
+    base_cmd = _tilingshell_gsettings_cmd()
+    try:
+        res = subprocess.run(
+            [*base_cmd, "get", _TILINGSHELL_SCHEMA, setting_key],
+            capture_output=True, text=True, timeout=1.5,
+        )
+        if res.returncode == 0:
+            raw_list = ast.literal_eval(res.stdout.strip().lstrip("@as ").strip())
+            if isinstance(raw_list, (list, tuple)):
+                for item in raw_list:
+                    chord = parse_gtk_accelerator(str(item))
+                    if chord:
+                        return chord
+            # Binding is empty (e.g. `['']`): set the default accelerator so
+            # Tiling Shell's live Gio.Settings listener activates it immediately.
+            subprocess.run(
+                [*base_cmd, "set", _TILINGSHELL_SCHEMA, setting_key, f"['{default_accel}']"],
+                capture_output=True, text=True, timeout=1.5,
+            )
+    except Exception:
+        pass
+    return default_chord
+
+
+def open_tilingshell_layout_editor() -> bool:
+    """Open Tiling Shell's layout editor via its D-Bus service
+    `org.gnome.Shell.Extensions.TilingShell.openLayoutEditor`."""
+    if not isinstance(_portal, _Portal):
+        return True
+    if installed("jeepney"):
+        try:
+            from jeepney import DBusAddress, new_method_call
+            from jeepney.io.blocking import open_dbus_connection
+            addr = DBusAddress(
+                "/org/gnome/Shell/Extensions/TilingShell",
+                bus_name="org.gnome.Shell",
+                interface="org.gnome.Shell.Extensions.TilingShell",
+            )
+            conn = open_dbus_connection("SESSION")
+            try:
+                conn.send_and_get_reply(new_method_call(addr, "openLayoutEditor"), timeout=2.0)
+                return True
+            finally:
+                conn.close()
+        except Exception:
+            pass
+    try:
+        r = subprocess.run(
+            [
+                "gdbus", "call", "--session",
+                "--dest", "org.gnome.Shell",
+                "--object-path", "/org/gnome/Shell/Extensions/TilingShell",
+                "--method", "org.gnome.Shell.Extensions.TilingShell.openLayoutEditor",
+            ],
+            capture_output=True, timeout=2.0,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_DIR_ALIASES = {
+    "l": "left", "left": "left", "west": "left",
+    "r": "right", "right": "right", "east": "right",
+    "u": "up", "up": "up", "top": "up", "upper": "up", "north": "up",
+    "d": "down", "down": "down", "bottom": "down", "lower": "down", "south": "down",
+    "c": "center", "center": "center", "centre": "center", "middle": "center",
+    "all": "all", "full": "all", "maximize": "all",
+    "next": "next", "forward": "next",
+    "prev": "prev", "previous": "prev", "backward": "prev", "back": "prev",
+}
+
+
+def tiling_shell_action(action: str, direction: str = "",
+                        monitor: Any = None, steps: int = 1) -> dict:
+    """Perform a GNOME Tiling Shell window action or monitor move.
+
+    Supported `action` values:
+      - `'tile'` / `'move_tile'` / `'move'` / `'snap'`: move window to tile in
+        `direction` (`'left' | 'right' | 'up' | 'down' | 'center'`). Note: in
+        Tiling Shell, moving past the edge tile of a monitor also moves the
+        window onto the adjacent monitor in that direction.
+      - `'span'` / `'extend'` / `'expand'`: extend the focused window's tile
+        span in `direction` (`'left' | 'right' | 'up' | 'down' | 'all'`).
+      - `'span_all'` / `'span_all_tiles'`: span window across all tiles.
+      - `'center'` / `'center_window'`: center floating window on screen.
+      - `'untile'` / `'untile_window'`: restore focused window from tiled state.
+      - `'untile_all'` / `'untile_all_windows'`: untile all windows on workspace.
+      - `'focus'` / `'focus_tile'`: focus tiled neighbor in `direction`
+        (`'left' | 'right' | 'up' | 'down' | 'next' | 'prev'`).
+      - `'highlight'` / `'highlight_window'`: highlight current window.
+      - `'cycle_layout'` / `'next_layout'` / `'prev_layout'`: cycle Tiling Shell
+        layouts on the current monitor.
+      - `'layout_editor'` / `'edit_layout'`: open Tiling Shell layout editor.
+      - `'move_to_monitor'` / `'move_window_to_monitor'`: move focused window to
+        target `monitor` (or `direction`).
+    """
+    act = (action or "tile").strip().lower().replace("-", "_").replace(" ", "_")
+    raw_dir = (direction or "").strip().lower()
+    norm_dir = _DIR_ALIASES.get(raw_dir, raw_dir)
+    count = max(1, min(10, int(steps or 1)))
+
+    # If monitor is given alongside tile/move, move to that monitor first!
+    moved_to_mon = None
+    if monitor is not None and str(monitor).strip() != "":
+        moved_to_mon = move_window_to_monitor(monitor)
+        if act in ("move_to_monitor", "move_window_to_monitor", "monitor"):
+            return {
+                "action": "move_to_monitor",
+                "monitor": moved_to_mon["monitor"]["number"],
+                "steps": moved_to_mon["steps"],
+            }
+        time.sleep(0.15)
+
+    if act in ("move_to_monitor", "move_window_to_monitor", "monitor"):
+        target_spec = monitor if (monitor is not None and str(monitor).strip()) else direction
+        if not target_spec:
+            raise DesktopError("no target monitor was given for move_window_to_monitor")
+        res = move_window_to_monitor(target_spec)
+        return {
+            "action": "move_to_monitor",
+            "monitor": res["monitor"]["number"],
+            "steps": res["steps"],
+        }
+
+    if act in ("layout_editor", "edit_layout", "open_layout_editor"):
+        ok = open_tilingshell_layout_editor()
+        if not ok:
+            raise DesktopError("could not open the Tiling Shell layout editor over D-Bus")
+        return {"action": "layout_editor"}
+
+    # Allow shorthand like action="tile_left", "span_right", "focus_up"
+    for prefix in ("tile_", "move_tile_", "move_window_", "span_window_", "span_", "focus_window_", "focus_"):
+        if act.startswith(prefix) and not norm_dir:
+            suffix = act[len(prefix):]
+            norm_dir = _DIR_ALIASES.get(suffix, suffix)
+            act = prefix.rstrip("_")
+            break
+
+    setting_key: Optional[str] = None
+    if act in ("tile", "move_tile", "move", "move_window", "snap"):
+        if norm_dir == "center":
+            setting_key = "move-window-center"
+        elif norm_dir in ("left", "right", "up", "down"):
+            setting_key = f"move-window-{norm_dir}"
+        elif norm_dir == "all":
+            setting_key = "span-window-all-tiles"
+        else:
+            raise DesktopError(
+                f"choose a direction for tiling: left, right, up, down or center (got '{direction}')")
+    elif act in ("span", "span_window", "extend", "expand"):
+        if norm_dir in ("all", "all_tiles", "full"):
+            setting_key = "span-window-all-tiles"
+        elif norm_dir in ("left", "right", "up", "down"):
+            setting_key = f"span-window-{norm_dir}"
+        else:
+            raise DesktopError(
+                f"choose a direction to span the window: left, right, up, down or all (got '{direction}')")
+    elif act in ("span_all", "span_all_tiles", "fill_all_tiles"):
+        setting_key = "span-window-all-tiles"
+    elif act in ("center", "center_window", "move_center", "move_window_center"):
+        setting_key = "move-window-center"
+    elif act in ("untile", "untile_window", "float"):
+        setting_key = "untile-window"
+    elif act in ("untile_all", "untile_all_windows"):
+        setting_key = "untile-all-windows"
+    elif act in ("focus", "focus_tile", "focus_window"):
+        if norm_dir in ("left", "right", "up", "down", "next", "prev"):
+            setting_key = f"focus-window-{norm_dir}"
+        else:
+            raise DesktopError(
+                f"choose a direction to focus: left, right, up, down, next or prev (got '{direction}')")
+    elif act in ("highlight", "highlight_window", "highlight_current_window"):
+        setting_key = "highlight-current-window"
+    elif act in ("cycle_layout", "cycle_layouts", "next_layout"):
+        setting_key = "cycle-layouts-backward" if norm_dir == "prev" else "cycle-layouts"
+    elif act in ("prev_layout", "cycle_layouts_backward"):
+        setting_key = "cycle-layouts-backward"
+    else:
+        raise DesktopError(
+            f"unknown Tiling Shell action '{action}' - use tile, span, span_all, "
+            f"center, untile, untile_all, focus, highlight, cycle_layout, "
+            f"layout_editor or move_to_monitor")
+
+    chord = _ensure_tilingshell_shortcut(setting_key)
+    for i in range(count):
+        hotkey(*chord)
+        if i + 1 < count:
+            time.sleep(0.1)
+
+    result: dict[str, Any] = {
+        "action": setting_key,
+        "keys": "+".join(chord),
+        "steps": count,
+    }
+    if moved_to_mon is not None:
+        result["monitor"] = moved_to_mon["monitor"]["number"]
+    return result
 
 
 # ── pyautogui stand-in ───────────────────────────────────────────────────────
