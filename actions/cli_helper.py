@@ -76,6 +76,27 @@ def _command(helper: str, level: str) -> list[str]:
     raise ValueError(f"unknown helper {helper}")
 
 
+# Gemini CLI reads this file after the user's own settings, and it wins. It
+# takes the shell tool away for helper runs even if the user's own Gemini
+# setup allows shell commands. Both spellings of the setting are given
+# because the name changed between versions.
+_GEMINI_SETTINGS = {
+    "tools": {"exclude": ["run_shell_command"]},
+    "excludeTools": ["run_shell_command"],
+}
+
+
+def _environment(helper: str) -> dict:
+    env = dict(os.environ)
+    if helper == "gemini":
+        import json
+        path = HOME / ".vision" / "gemini-helper-settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(_GEMINI_SETTINGS), encoding="utf-8")
+        env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(path)
+    return env
+
+
 def installed(helper: str) -> bool:
     return shutil.which(HELPERS[helper]["binary"]) is not None
 
@@ -183,11 +204,16 @@ def _finish(job: dict, player) -> None:
 def _run(job: dict, player) -> None:
     out, err = "", ""
     try:
-        proc = subprocess.Popen(
-            job["cmd"], cwd=job["folder"], stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace", start_new_session=True)
-        job["proc"] = proc
+        with _lock:
+            if job.get("cancel"):          # cancelled before it started
+                job["status"], job["ended"] = "cancelled", time.time()
+                return
+            proc = subprocess.Popen(
+                job["cmd"], cwd=job["folder"], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", start_new_session=True,
+                env=_environment(job["helper"]))
+            job["proc"] = proc
         try:
             out, err = proc.communicate(job["task"], timeout=job["minutes"] * 60)
         except subprocess.TimeoutExpired:
@@ -297,11 +323,13 @@ def cli_helper(parameters: dict, player=None) -> str:
     if job is None:
         return "There is no helper job to act on."
     if action == "cancel":
-        proc = job.get("proc")
-        if job["status"] != "running" or proc is None:
-            return f"Job {job['id']} is not running."
-        job["cancel"] = True
-        _kill(proc)
+        with _lock:
+            if job["status"] != "running":
+                return f"Job {job['id']} is not running."
+            job["cancel"] = True           # also honoured if it has not started yet
+            proc = job.get("proc")
+        if proc is not None:
+            _kill(proc)
         return f"Stopped job {job['id']}."
     if action == "result":
         if job["status"] == "running":

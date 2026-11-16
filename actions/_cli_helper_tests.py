@@ -166,6 +166,29 @@ def main() -> int:
             ch.cli_helper({"action": "cancel", "job_id": jid})
             _wait(jid)
 
+        # cancelled before the program had started
+        before = len(log.read_text().splitlines())
+        job = {"id": "hx", "helper": "claude", "task": "x", "folder": str(project), "minutes": 1,
+               "status": "running", "started": time.time(), "ended": 0.0, "result": "",
+               "error": "", "cmd": ch._command("claude", "read"), "cancel": True}
+        ch._run(job, None)
+        check("an early cancel is honoured", job["status"] == "cancelled"
+              and len(log.read_text().splitlines()) == before, job["status"])
+
+        # Gemini runs get a settings file that removes the shell tool
+        import json
+        real_home = ch.HOME
+        ch.HOME = tmp
+        try:
+            env = ch._environment("gemini")
+            settings = json.loads(Path(env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
+            check("gemini: shell tool excluded", "run_shell_command" in settings["tools"]["exclude"]
+                  and "run_shell_command" in settings["excludeTools"], str(settings))
+            check("claude: environment untouched",
+                  "GEMINI_CLI_SYSTEM_SETTINGS_PATH" not in ch._environment("claude"))
+        finally:
+            ch.HOME = real_home
+
         # not installed
         os.environ["PATH"] = "/nonexistent"
         out = ch.cli_helper({"action": "start", "task": "x", "helper": "gemini"})
