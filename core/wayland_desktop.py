@@ -539,7 +539,9 @@ def _grab(portal: _Portal, mon: dict):
         err = proc.stderr.decode("utf-8", "replace").strip()[-300:]
         raise DesktopError(f"could not capture the screen "
                            f"(got {len(data)} of {w * h * 4} bytes) {err}")
-    return PIL.Image.frombuffer("RGB", (w, h), data[: w * h * 4], "raw", "RGBX", 0, 1)
+    # frombytes, not frombuffer: frombuffer maps the bytes and hands back a
+    # read-only image in mode RGBX, which cannot be saved as JPEG or PNG.
+    return PIL.Image.frombytes("RGB", (w, h), data[: w * h * 4], "raw", "RGBX")
 
 
 def screenshot(region: Optional[tuple[int, int, int, int]] = None):
