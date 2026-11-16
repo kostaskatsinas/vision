@@ -48,3 +48,6 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# ── The wake word model, downloaded by the WAKE WORD button ───────────────────
+config/wake_word/

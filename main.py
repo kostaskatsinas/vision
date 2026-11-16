@@ -90,7 +90,8 @@ from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
 from core.viseme               import VisemeStream
 from core.wake_word            import (
-    WakeWordDetector, is_ready as wake_is_ready, install_and_download as wake_install,
+    WakeWordDetector, WAKE_PHRASE, is_ready as wake_is_ready,
+    install_and_download as wake_install,
 )
 
 # How long the assistant stays awake with no user speech before it auto-sleeps
@@ -789,7 +790,7 @@ class VisionLive:
         return True
 
     def _on_wake_detected(self) -> None:
-        """Called from the detector thread when 'Hey Jarvis' is heard."""
+        """Called from the detector thread when the wake phrase is heard."""
         self.wake(reason="wake word")
 
     def wake(self, reason: str = "wake word") -> None:
@@ -810,7 +811,7 @@ class VisionLive:
             detector.reset()        # nothing heard before sleeping may wake it again
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
-        self.ui.write_log(f"SYS: Sleeping — {reason}. Say 'Hey Jarvis' to wake me.")
+        self.ui.write_log(f"SYS: Sleeping — {reason}. Say '{WAKE_PHRASE}' to wake me.")
 
     async def _run_sleep_watch(self) -> None:
         """Auto-sleep after the configured silence window (wake-word mode only)."""
@@ -860,7 +861,7 @@ class VisionLive:
             self.wake(reason="you tapped wake")
 
     def _ui_wake_install(self) -> tuple[bool, str]:
-        """Download openwakeword + the model (runs in a UI worker thread)."""
+        """Download sherpa-onnx + the model (runs in a UI worker thread)."""
         # Triggered by the user pressing the button, so its progress is exactly
         # what they are waiting to see.
         return wake_install(logger=lambda m: print(f"[Wake] {m}"),
@@ -1238,9 +1239,9 @@ class VisionLive:
             return
         # Respect wake-word sleep: a typed command must not be answered while
         # asleep either (the sleep gate is not just for the mic). Wake first with
-        # "Hey Jarvis" or the WAKE NOW button.
+        # the wake phrase or the WAKE NOW button.
         if self._wake_enabled and not self._awake:
-            self.ui.write_log("SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first.")
+            self.ui.write_log(f"SYS: I'm asleep — say '{WAKE_PHRASE}' or tap WAKE NOW first.")
             return
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
@@ -2833,7 +2834,7 @@ class VisionLive:
                         self.ui.write_log("SYS: Reconnected — conversation restored.")
 
                     # Wake word: if enabled, come up ASLEEP (mic gated, silent)
-                    # until the user says "Hey Jarvis" or taps wake in the UI.
+                    # until the user says the wake phrase or taps wake in the UI.
                     #
                     # Only on the FIRST connect of a run. A reconnect — a dropped
                     # network, the server rotating the connection — used to put an
@@ -2858,7 +2859,7 @@ class VisionLive:
                     if self._wake_enabled and wake_ok and (first_connect or not self._awake):
                         self._awake = False
                         self.ui.set_state("SLEEPING")
-                        self.ui.write_log("SYS: VISION online — sleeping. Say 'Hey Jarvis' to wake me.")
+                        self.ui.write_log(f"SYS: VISION online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
                     else:
                         self._awake = True
                         self.ui.set_state("LISTENING")

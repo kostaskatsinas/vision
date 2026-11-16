@@ -2383,7 +2383,7 @@ class MainWindow(QMainWindow):
     def _toggle_wake_word(self):
         st = self._wake_state()
         if not st["ready"]:
-            # First time: download openwakeword + model in a worker thread.
+            # First time: download sherpa-onnx + model in a worker thread.
             self._wake_btn.setText("⬇  DOWNLOADING… (one-time)")
             self._wake_btn.setEnabled(False)
             def _work():
