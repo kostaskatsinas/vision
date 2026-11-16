@@ -612,7 +612,7 @@ def _schedule_daily_update(hour: int = 3, minute: int = 0) -> str:
 
 def _schedule_linux(hour: int, minute: int) -> str:
     script_path = Path(__file__).resolve()
-    marker      = "# JARVIS_GameUpdater"
+    marker      = "# VISION_GameUpdater"
     cron_entry  = f"{minute} {hour} * * * {sys.executable} {script_path} --scheduled  {marker}"
     try:
         existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
@@ -634,7 +634,7 @@ def _cancel_scheduled_update() -> str:
     try:
         existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         lines    = [l for l in existing.stdout.splitlines()
-                    if "JARVIS_GameUpdater" not in l]
+                    if "VISION_GameUpdater" not in l]
         subprocess.run(["crontab", "-"],
                        input="\n".join(lines) + "\n", text=True)
         return "Scheduled update cancelled."
@@ -646,9 +646,9 @@ def _get_schedule_status() -> str:
 
     try:
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-        if "JARVIS_GameUpdater" in result.stdout:
+        if "VISION_GameUpdater" in result.stdout:
             for line in result.stdout.splitlines():
-                if "JARVIS_GameUpdater" in line:
+                if "VISION_GameUpdater" in line:
                     return f"Game update is scheduled: {line.split('#')[0].strip()}"
         return "No scheduled game update found."
     except Exception:

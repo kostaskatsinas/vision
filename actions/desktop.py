@@ -125,7 +125,7 @@ def _keep_dir() -> Path:
     if xdg and Path(xdg).is_dir():
         pictures = Path(xdg)
     base = pictures if pictures.is_dir() else _get_base_dir() / "config"
-    keep = base / "Jarvis Wallpapers"
+    keep = base / "Vision Wallpapers"
     keep.mkdir(parents=True, exist_ok=True)
     return keep
 
@@ -390,7 +390,7 @@ def set_wallpaper_from_url(url: str) -> str:
                               url=address)
     try:
         request = urllib.request.Request(
-            address, headers={"User-Agent": "Mozilla/5.0 (compatible; JARVIS)",
+            address, headers={"User-Agent": "Mozilla/5.0 (compatible; VISION)",
                               "Accept": "image/*,*/*"})
         with urllib.request.urlopen(request, timeout=25) as response:
             content_type = response.headers.get("Content-Type", "")

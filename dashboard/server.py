@@ -1,5 +1,5 @@
 """
-dashboard/server.py — JARVIS Local HTTP Dashboard
+dashboard/server.py — VISION Local HTTP Dashboard
 
 HTTPS on port 8000 with a self-signed certificate generated on first run, plus
 a second layer inside it: commands are encrypted with AES-256-GCM under a key
@@ -58,8 +58,8 @@ MAX_UPLOAD_MB = 500
 def _make_uploads_dir() -> Path:
     """Return (and create) the cross-platform uploads folder."""
     for candidate in [
-        Path.home() / "Downloads" / "JARVIS Uploads",
-        Path.home() / "Documents" / "JARVIS Uploads",
+        Path.home() / "Downloads" / "VISION Uploads",
+        Path.home() / "Documents" / "VISION Uploads",
         BASE_DIR / "uploads",
     ]:
         try:
@@ -84,7 +84,7 @@ _KEY_CHARS = [c for c in (string.ascii_uppercase + string.digits)
               if c not in ('O', 'I', 'L', '0', '1')]
 
 # ── AES-256-CBC ───────────────────────────────────────────────────────────────
-_AES_SALT = b'JARVIS-DASHBOARD-v1'
+_AES_SALT = b'VISION-DASHBOARD-v1'
 
 
 # Rounds for the pairing key -> AES key derivation.
@@ -299,8 +299,8 @@ def _ensure_certs() -> bool:
     plain HTTP, which still works — the QR code simply encodes http:// instead.
     """
     certs = BASE_DIR / "config" / "certs"
-    key_p = certs / "jarvis.key"
-    crt_p = certs / "jarvis.crt"
+    key_p = certs / "vision.key"
+    crt_p = certs / "vision.crt"
     if key_p.exists() and crt_p.exists():
         return True
 
@@ -321,8 +321,8 @@ def _ensure_certs() -> bool:
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
         who = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "JARVIS Dashboard"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "JARVIS"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "VISION Dashboard"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "VISION"),
         ])
 
         # The SAN has to cover every address the phone might use: the LAN IP the
@@ -496,7 +496,7 @@ class DashboardServer:
         except Exception:
             return False
         certs = BASE_DIR / "config" / "certs"
-        return (certs / "jarvis.key").exists() and (certs / "jarvis.crt").exists()
+        return (certs / "vision.key").exists() and (certs / "vision.crt").exists()
 
     def get_url(self) -> str:
         """The full URL the QR code carries — always with its scheme, so a
@@ -640,7 +640,7 @@ class DashboardServer:
   h2{color:#f87171;margin-bottom:12px}p{color:#5e6a7e;font-size:14px}
 </style></head>
 <body><div><h2>Link Expired</h2>
-<p>Press <strong style="color:#dde3ed">Remote Control</strong> in JARVIS to get a new QR code.</p>
+<p>Press <strong style="color:#dde3ed">Remote Control</strong> in VISION to get a new QR code.</p>
 </div></body></html>""")
 
             del self._pending_keys[key]
@@ -666,12 +666,12 @@ class DashboardServer:
 </style></head>
 <body>
 <script>
-  sessionStorage.setItem('jarvis_token','{tok}');
-  sessionStorage.setItem('jarvis_key','{key}');
-  localStorage.setItem('jarvis_device_token','{dev_tok}');
+  sessionStorage.setItem('vision_token','{tok}');
+  sessionStorage.setItem('vision_key','{key}');
+  localStorage.setItem('vision_device_token','{dev_tok}');
   setTimeout(function(){{location.replace('/')}},400);
 </script>
-<p>Connecting to JARVIS…</p>
+<p>Connecting to VISION…</p>
 </body></html>""")
 
         @app.post("/api/device-login")
@@ -956,8 +956,8 @@ class DashboardServer:
             pass
 
         use_ssl  = self._ssl_enabled()
-        ssl_key  = BASE_DIR / "config" / "certs" / "jarvis.key"
-        ssl_cert = BASE_DIR / "config" / "certs" / "jarvis.crt"
+        ssl_key  = BASE_DIR / "config" / "certs" / "vision.key"
+        ssl_cert = BASE_DIR / "config" / "certs" / "vision.crt"
 
         # TLS IS WANTED, BUT NOT AT THE COST OF NOT STARTING.
         #
@@ -991,7 +991,7 @@ class DashboardServer:
         # CAN THIS PORT ACTUALLY BE TAKEN?
         #
         # uvicorn raises when the port is busy, and under pythonw.exe there is
-        # no console for that to be seen in — so a second JARVIS, or anything
+        # no console for that to be seen in — so a second VISION, or anything
         # else already on 8000, produced a dashboard that was silently dead
         # while the HUD went on showing a QR code pointing at it. The phone
         # then reports ERR_CONNECTION_REFUSED, which is true and impossible to
@@ -1009,7 +1009,7 @@ class DashboardServer:
             _probe.close()
             self._bind_error = (
                 f"port {SECURE_PORT if use_ssl else PORT} is already in use — "
-                f"another copy of JARVIS is probably running. Close it and "
+                f"another copy of VISION is probably running. Close it and "
                 f"restart, or the phone dashboard will stay unreachable "
                 f"({exc.__class__.__name__})")
             print(f"[Dashboard] {self._bind_error}")
@@ -1017,5 +1017,5 @@ class DashboardServer:
         _probe.close()
 
         print(f"[Dashboard] {self.get_url()}")
-        print("[Dashboard] Press 'Remote Control' in JARVIS UI to get the QR code.")
+        print("[Dashboard] Press 'Remote Control' in VISION UI to get the QR code.")
         await uvicorn.Server(cfg).serve()
