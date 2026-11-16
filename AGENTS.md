@@ -106,3 +106,12 @@ a small built-in fallback — instead of crashing.
 - Settings and keys live in `config/api_keys.json` through
   `memory/config_manager.py`; never write that file directly.
 - Keep to the libraries already in `requirements.txt`.
+- The project folder is `core.paths.base_dir()`; do not write another copy of
+  that function.
+- A tool that deletes files, sends a message or email, or installs software
+  must wait for the user's CONFIRM click. Add its rule to `describe()` in
+  `core/ask_first.py`, which parks the call behind the banner from
+  `core/confirm.py`. Never let the model fill in a `confirmed` flag for these.
+- This fork is Linux only (GNOME on Wayland). Do not add Windows or macOS code.
+- New features go in `readme.md` (the feature list) and, if they need setup,
+  in `docs/VISION.md`.

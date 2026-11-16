@@ -8,14 +8,23 @@ This repository is a fork of
 [FatihMakes/Mark-LVII](https://github.com/FatihMakes/Mark-LVII). The upstream
 project provides the voice engine, the window, the tools and the plugin system.
 This document describes what the fork adds and how it is set up on the target
-machine. The upstream documentation is in [`readme.md`](../readme.md).
+machine. The full feature list is in [`readme.md`](../readme.md), and upstream's
+release notes are kept in [`UPSTREAM_HISTORY.md`](UPSTREAM_HISTORY.md).
 
 ## Status
 
-Steps 1 to 4 of the plan below are done: Vision runs on the target machine,
-asks before risky actions, reads and writes Google Calendar, and sees, clicks
-and types on Wayland. Step 5 is built: Claude Code and Gemini CLI work as
-background helpers, and a local model can be switched on (see Models).
+All five steps of the plan below are done: Vision runs on the target machine,
+asks before risky actions, reads and writes Google Calendar, sees, clicks and
+types on Wayland, and hands long jobs to Claude Code or Gemini CLI. A local
+model can be switched on (see Models).
+
+Added since the plan: closing and force-killing apps by name, GNOME Tiling
+Shell window actions, and opening apps or moving windows onto a chosen monitor
+(see Windows and monitors). The code was also tidied up without changing what
+it does.
+
+Not yet tried on the target machine: the window and monitor actions, the local
+model, and Gemini CLI as a helper (its sign-in fails there).
 
 ## Target machine
 
@@ -182,6 +191,36 @@ Needs `jeepney` (in `requirements.txt`) and `gst-launch-1.0` with the PipeWire
 plugin (`sudo apt install gstreamer1.0-tools gstreamer1.0-pipewire` if absent).
 Tests that need no desktop: `python -m core._wayland_tests`.
 
+## Windows and monitors
+
+`actions/open_app.py` and `actions/computer_control.py` handle these. Ask
+"which screens do I have?" to hear how Vision numbers your monitors; "left",
+"right", "top", "bottom", "center" and "main" also work.
+
+| Say | What happens |
+|---|---|
+| "Open Spotify on monitor 1" / "open terminal on the left monitor" | Opens the app, then moves its window to that monitor |
+| "Open Firefox on the right half of screen 2" | Opens, moves, then tiles it with Tiling Shell |
+| "Close Chrome" | `close_app`: asks every Chrome process to quit; an app with unsaved work stays open and Vision says so |
+| "Kill Spotify" | `kill_app`: force-quits every Spotify process. If the name matches several apps, Vision asks which one first |
+| "Tile this window left" / "span it across all tiles" / "untile everything" | Tiling Shell actions on the focused window |
+| "Next layout" / "open the layout editor" | Tiling Shell layout actions |
+| "Move this window to monitor 3" | Moves the focused window to that monitor |
+
+Vision's own processes are never closed or killed by these. Closing and killing
+an app do not use the confirm banner: closing leaves unsaved work alone, and
+killing only happens when you say "kill".
+
+Tiling needs the Tiling Shell GNOME extension
+(`tilingshell@ferrarodomenico.com`, from extensions.gnome.org). Vision presses the extension's keyboard shortcuts, read from
+its own settings, so shortcuts you changed keep working; a shortcut that is
+empty is set back to the extension's default. Without the extension the tiling
+keys do nothing. Moving a window to another monitor uses GNOME's own shortcuts
+and does not need the extension. Wayland does not say which monitor a window
+is on, so Vision assumes it is on the working screen; if a window ends up one
+screen off, first say which screen it is on now ("use screen 2"), then ask
+again.
+
 ## Models
 
 | Job | Model | Why |
@@ -248,7 +287,8 @@ Run Vision in a Python virtual environment, not in Docker. It needs direct
 access to the microphone, speakers, desktop and running applications, and a
 container would have to be opened up for each of those.
 
-Upstream supports Python 3.11 to 3.13.
+Upstream is tested on Python 3.11 to 3.13. The target machine runs 3.14;
+`setup.py` warns about that and carries on, and Vision runs on it.
 
 ```bash
 git clone https://github.com/kostaskatsinas/vision
