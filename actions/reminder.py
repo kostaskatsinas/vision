@@ -207,7 +207,7 @@ def _mirror_to_cloud(message: str, target_dt: datetime) -> str:
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "reminder",
-    "description": "Sets a timed reminder using Task Scheduler.",
+    "description": "Sets a timed reminder on this computer: a desktop notification at that time, also said aloud while the assistant runs. For a reminder in the user's Google Calendar, use google_calendar (create with reminder_minutes) instead.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
