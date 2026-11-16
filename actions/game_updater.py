@@ -606,6 +606,14 @@ def _update_epic_games(epic_exe: Path, game_name: str = None) -> str:
         except Exception as e:
             return f"Epic launch failed: {e}"
 
+# Schedules saved before the rename carry the old marker; keep finding them.
+_MARKERS = ("VISION_GameUpdater", "JAR" + "VIS_GameUpdater")
+
+
+def _is_ours(line: str) -> bool:
+    return any(m in line for m in _MARKERS)
+
+
 def _schedule_daily_update(hour: int = 3, minute: int = 0) -> str:
     return _schedule_linux(hour, minute)
 
@@ -617,7 +625,7 @@ def _schedule_linux(hour: int, minute: int) -> str:
     try:
         existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         lines    = [l for l in existing.stdout.splitlines()
-                    if marker not in l and str(script_path) not in l]
+                    if not _is_ours(l) and str(script_path) not in l]
         lines.append(cron_entry)
         proc = subprocess.run(["crontab", "-"],
                               input="\n".join(lines) + "\n",
@@ -634,7 +642,7 @@ def _cancel_scheduled_update() -> str:
     try:
         existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         lines    = [l for l in existing.stdout.splitlines()
-                    if "VISION_GameUpdater" not in l]
+                    if not _is_ours(l)]
         subprocess.run(["crontab", "-"],
                        input="\n".join(lines) + "\n", text=True)
         return "Scheduled update cancelled."
@@ -646,10 +654,9 @@ def _get_schedule_status() -> str:
 
     try:
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-        if "VISION_GameUpdater" in result.stdout:
-            for line in result.stdout.splitlines():
-                if "VISION_GameUpdater" in line:
-                    return f"Game update is scheduled: {line.split('#')[0].strip()}"
+        for line in result.stdout.splitlines():
+            if _is_ours(line):
+                return f"Game update is scheduled: {line.split('#')[0].strip()}"
         return "No scheduled game update found."
     except Exception:
         return "No scheduled game update found."
