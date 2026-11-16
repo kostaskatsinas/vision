@@ -122,10 +122,11 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 # only ever uses Gemini should not pay for them. Deleting providers/ removes
 # the whole feature and the app runs exactly as it did before it existed.
 
-# ── Optional: local wake word ("Hey Jarvis") ──────────────────────────────────
+# ── Optional: local wake word ("Vision") ──────────────────────────────────
 # Deliberately NOT installed by default — it's opt-in. Enable it (and download
 # the tiny model) with one click from ⚙ → WAKE WORD in the app, or install it
-# yourself with:  pip install openwakeword
+# yourself with:  pip install sherpa-onnx
+# (the app's button also downloads the 17 MB keyword model)
 #
 # OS actions (volume, brightness, reminders) shell out to native tools
 # (pactl / brightnessctl / systemd), so no extra Python packages are needed.

@@ -56,10 +56,13 @@ it does any of these:
 5. **Add the other models:** a local model for offline use, and Claude Code and
    Gemini CLI as background helpers.
 
-A custom "Hey Vision" wake word is a small extra step after step 1. Upstream
-ships a pretrained "Hey Jarvis" model (`core/wake_word.py`), so a new phrase
-needs its own trained model. The assistant's displayed name is an existing
-setting and needs no code change.
+The wake word is "Vision" ("Hey Vision" works too). Turn it on from CONTROLS
+→ WAKE WORD; the first click installs `sherpa-onnx` and downloads a 17 MB
+model into `config/wake_word/`. Vision then sleeps until it hears its name and
+goes back to sleep after 2 minutes of silence. Upstream's wake word was a
+pretrained model that only knew its own phrase, so `core/wake_word.py` now uses
+a keyword spotter that takes the phrase as text and needs no training. If it
+wakes too easily or not easily enough, change `DEFAULT_THRESHOLD` there.
 
 ## Ask-first rule
 
