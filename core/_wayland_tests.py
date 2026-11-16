@@ -71,6 +71,9 @@ class FakePortal:
     def keycode(self, code, pressed):
         self._rec("keycode", code, bool(pressed))
 
+    def pipewire_fd(self):
+        return os.open(os.devnull, os.O_RDONLY)
+
 
 def _fresh() -> FakePortal:
     wd.release()
@@ -214,6 +217,34 @@ def test_typing() -> None:
         wd.current_layout, wd.configured_layouts = real_current, real_configured
 
 
+def test_capture() -> None:
+    import io
+    import subprocess
+    _fresh()
+    wd.use_monitor("3")
+    seen = {}
+    real_run = wd.subprocess.run
+
+    def run(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, bytes([10, 20, 30, 0]) * (1920 * 1080), b"")
+    wd.subprocess.run = run
+    try:
+        image = wd.screenshot()
+        check("frame scaled to the logical size",
+              "video/x-raw,format=RGBx,width=1920,height=1080" in seen["cmd"]
+              and "videoscale" in seen["cmd"], str(seen.get("cmd")))
+        check("image size", image.size == (1920, 1080), str(image.size))
+        check("colours decoded", image.getpixel((5, 5)) == (10, 20, 30))
+        buf = io.BytesIO()
+        image.save(buf, "PNG")
+        image.save(io.BytesIO(), "JPEG")
+        check("image can be saved", buf.tell() > 0)
+        check("region crop", wd.screenshot(region=(0, 0, 100, 50)).size == (100, 50))
+    finally:
+        wd.subprocess.run = real_run
+
+
 def test_session_lifecycle() -> None:
     portal = _fresh()
     before = FakePortal.opened
@@ -252,6 +283,13 @@ def test_shim() -> None:
         pyautogui.press("enter")
         pyautogui.scroll(-3)
         pyautogui.moveTo(7, 8, duration=0.2)
+        before = len(portal.log)
+        try:
+            pyautogui.write("caf\u00e9 \U0001F600")
+            check("untypeable text refused", False)
+        except wd.DesktopError as e:
+            check("untypeable text refused", "nothing was typed" in str(e), str(e))
+        check("nothing typed when refused", len(portal.log) == before)
         check("shim calls reach the portal", ("move", 71, 5, 6) in portal.log
               and ("keycode", 47, True) in portal.log and ("keycode", 28, True) in portal.log
               and ("axis", 0, 3) in portal.log and ("move", 71, 7, 8) in portal.log, str(portal.log))
@@ -271,7 +309,7 @@ def main() -> int:
     wd.IDLE_CLOSE_S = 3600
     wd.missing = lambda: []             # the recorder needs neither package
     for test in (test_keyboard_planning, test_monitors, test_pointer, test_keys,
-                 test_typing, test_session_lifecycle, test_shim):
+                 test_typing, test_capture, test_session_lifecycle, test_shim):
         test()
     wd.release()
     wd._factory = wd._Portal
