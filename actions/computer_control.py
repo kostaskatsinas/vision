@@ -532,18 +532,35 @@ def _screen_find(description: str) -> tuple[int, int] | None:
     return _locate(description)[0]
 
 
-def _changed_near(before, x: int, y: int, radius: int = 120) -> bool | None:
+def _cursor_box(x: int, y: int) -> tuple[int, int, int, int]:
+    # The pointer is drawn from its tip down and to the right; 72 px covers a
+    # large cursor theme.
+    return (x - 16, y - 16, x + 72, y + 72)
+
+
+def _changed_near(before, x: int, y: int, old_pointer=None,
+                  radius: int = 120) -> bool | None:
     """Whether the screen around (x, y) looks different from `before`.
-    None when it cannot be told."""
+    None when it cannot be told.
+
+    Screenshots include the mouse pointer (on Wayland the portal draws it into
+    the frame), and the pointer moved to (x, y) for the click, so the area
+    under the pointer now and where it was before is left out. Otherwise a
+    missed click always looks like a change."""
     try:
-        from PIL import ImageChops
+        from PIL import ImageChops, ImageDraw
         after = pyautogui.screenshot()
         if before is None or after.size != before.size:
             return None
+        imgs = [before.convert("RGB"), after.convert("RGB")]
+        for img in imgs:
+            draw = ImageDraw.Draw(img)
+            draw.rectangle(_cursor_box(x, y), fill=(0, 0, 0))
+            if old_pointer:
+                draw.rectangle(_cursor_box(*old_pointer), fill=(0, 0, 0))
         box = (max(0, x - radius), max(0, y - radius),
                min(after.size[0], x + radius), min(after.size[1], y + radius))
-        diff = ImageChops.difference(before.convert("RGB").crop(box),
-                                     after.convert("RGB").crop(box))
+        diff = ImageChops.difference(imgs[0].crop(box), imgs[1].crop(box))
         return diff.getbbox() is not None
     except Exception as e:
         print(f"[ComputerControl] ⚠️ could not compare screenshots: {e}")
@@ -681,10 +698,14 @@ def computer_control(
             desc   = params.get("description", "")
             coords, before = _locate(desc)
             if coords:
+                try:
+                    old_pointer = tuple(pyautogui.position())
+                except Exception:
+                    old_pointer = None
                 time.sleep(0.2)
                 _click(x=coords[0], y=coords[1])
                 time.sleep(0.6)
-                changed = _changed_near(before, coords[0], coords[1])
+                changed = _changed_near(before, coords[0], coords[1], old_pointer)
                 if changed is False:
                     return (f"Clicked where '{desc}' seemed to be, at {coords}, but "
                             f"nothing on screen changed there, so it may have missed. "
