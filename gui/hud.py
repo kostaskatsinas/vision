@@ -105,8 +105,11 @@ class HudCanvas(QWidget):
         # so paintEvent blits it in one call instead of thousands of drawPoint()s.
         self._grid_cache: QPixmap | None = None
         self._grid_key = None
-        # Repaint throttle counter (idle frames drop to ~20 Hz — see _step()).
-        self._paint_tick = 0
+        # Repaint throttle: ticks since the last paint, and when the state
+        # last changed (see _step() and _idle_every()).
+        self._since_paint = 0
+        self._idle_state = None
+        self._idle_since = 0.0
 
         # Live audio reactivity: _live_amp is written from the audio threads
         # (0.0–1.0), _amp_disp is the smoothed value the paint code reads.
@@ -381,22 +384,48 @@ class HudCanvas(QWidget):
             _blinked = False
 
         # Repaint throttling — advancing the animation state above is cheap at
-        # 60 Hz, but the paint is heavy. Active (speaking, audio, thinking) runs
-        # at ~30 Hz, which is the frame rate animation has used for talking
-        # characters forever and is indistinguishable here; idle drops to ~20 Hz
-        # so a sleeping HUD stops pinning a CPU core. The visuals stay smooth
-        # either way because the animation state keeps stepping at 60 Hz.
-        self._paint_tick = (self._paint_tick + 1) % 6
+        # 60 Hz, but the paint is heavy (about 12 ms for the head, measured).
+        # Active (speaking, audio, thinking) runs at ~30 Hz, which is the frame
+        # rate animation has used for talking characters forever and is
+        # indistinguishable here. Idle used to paint at 20 Hz all day, a quarter
+        # of a CPU core for a face that is barely moving; it now paints at
+        # 12 Hz, and at 6 Hz while asleep or muted — see _idle_every(). The
+        # animation state keeps stepping at 60 Hz, so nothing snaps on waking.
+        self._since_paint += 1
         active = (self.speaking or amp > 0.02
                   or self.state in ("THINKING", "PROCESSING"))
-        if _blinked or (self._paint_tick % 2 == 0 if active
-                        else self._paint_tick % 3 == 0):
+        if _blinked or self._since_paint >= (2 if active else self._idle_every(now)):
+            self._since_paint = 0
             # Nothing is on screen when the window is hidden or minimised, so
             # rendering the avatar into it is pure waste — and this app is meant
             # to sit running all day. The animation state above keeps stepping,
             # so it picks up mid-motion instead of snapping when you come back.
             if self._on_screen():
                 self.update()
+
+    def _idle_every(self, now: float) -> int:
+        """How many 60 Hz ticks pass between two paints while idle.
+
+        3 (20 Hz) for the moments that need it: the second and a half after
+        the state changes, when the eyelids and the colours are still easing
+        over, and while the head is blinking or glancing somewhere - a blink
+        lasts about 120 ms and would be skipped whole at a lower rate.
+        Otherwise 5 (12 Hz), and 10 (6 Hz) while asleep or muted, when the
+        only movement left is a slow sway."""
+        key = (self.state, self.muted, self.hud_style)
+        if key != self._idle_state:
+            self._idle_state = key
+            self._idle_since = now
+        if now - self._idle_since < 1.5:
+            return 3
+        av = self._avatar
+        if av is not None and self.hud_style == "face":
+            try:
+                if av._blink > 0.0 or av._glance is not None:
+                    return 3
+            except AttributeError:
+                pass
+        return 10 if (self.muted or self.state == "SLEEPING") else 5
 
     def _on_screen(self) -> bool:
         """True only when this canvas can actually be seen by the user."""

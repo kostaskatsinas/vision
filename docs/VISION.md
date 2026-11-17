@@ -89,6 +89,7 @@ you how it went.
 |---|---|
 | `file_controller` with `action=delete` | yes |
 | `send_message` (WhatsApp, Telegram, Signal, Discord, Instagram, Messenger) | yes |
+| `chat_reply` with `action=send` (types a reply into the chat open on screen) | yes, and the banner shows the exact words and who the chat is with |
 | `dev_agent` build or improve jobs (may `pip install` packages) | yes |
 | `google_calendar` with `action=delete` | yes, and the banner names the event |
 | `google_calendar` creating an event with attendees (Google emails them) | yes |
@@ -220,6 +221,54 @@ and does not need the extension. Wayland does not say which monitor a window
 is on, so Vision assumes it is on the working screen; if a window ends up one
 screen off, first say which screen it is on now ("use screen 2"), then ask
 again.
+
+## Scenes, timers and chat reply
+
+**Scenes** (`actions/scenes.py`) are stored in `memory/scenes.json`. Starting
+one opens its apps one at a time, because each app is placed by moving the
+pointer to its monitor and tiling the front window, and two launches at once
+would fight over both. An app that does not appear within the usual wait is
+named at the end; the others still open. Tiling needs the Tiling Shell
+extension (see above).
+
+**Timers** (`core/timers.py`, `actions/timer.py`) count inside Vision, so they
+only ring while Vision is running. One that runs out while Vision is closed is
+reported the next time it starts. For something that must ring whether Vision
+is open or not, set a reminder instead; those are handed to systemd. The sound
+is the desktop's own alarm sound, played with `pw-play` or `paplay`.
+
+**Chat reply** (`actions/chat_reply.py`) works from a picture of the screen
+Vision is looking at, so the conversation has to be visible there ("use the
+left screen" changes which one). To send, it finds the message field in the
+picture, clicks it, types the reply and presses Enter, then looks again to see
+whether the message is in the conversation. A reply is one line; emoji and
+other characters the keyboard cannot type are refused before anything is typed.
+
+## Spotify
+
+`plugins/spotify.py` plays a song, album, artist or playlist by name in the
+Spotify desktop app. Play, pause, next and previous worked before and still go
+through `playerctl`.
+
+One-time setup, about two minutes:
+
+1. Open <https://developer.spotify.com/dashboard>, sign in and choose
+   **Create app**. Any name and description; for the redirect URI enter
+   `http://127.0.0.1:8888/callback` (it is never used); tick **Web API**.
+2. Open the app's **Settings** and copy the **Client ID** and **Client secret**.
+3. In Vision: SETUP → the plugin settings, section SPOTIFY. Paste both, save,
+   and press TEST.
+
+The ID and secret are used only to search Spotify's catalogue. They do not
+sign in as you, so Vision cannot see or change your playlists or library.
+Spotify may ask for a Premium account before it lets you create the app.
+
+Playing goes through the desktop app (`.deb`, snap or flatpak), which must be
+signed in. `playerctl` is needed to read back what is playing; without it
+Vision says it asked but cannot confirm.
+
+Without the ID and secret, "play X on Spotify" opens Spotify's search page for
+X and says it could not press play.
 
 ## Models
 

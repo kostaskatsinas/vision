@@ -2,7 +2,8 @@
 core/ask_first.py - Vision's ask-first rule.
 
 Vision must ask before it deletes files, sends a message or email, or installs
-software. Deleting a calendar event and inviting people to one count too. This module decides which tool calls fall under that rule and parks
+software. Deleting a calendar event, inviting people to one and replying in a
+chat on screen count too. This module decides which tool calls fall under that rule and parks
 them behind the on-screen CONFIRM / CANCEL banner from core/confirm.py.
 
 The decision is made here, in code, from the tool name and its arguments. The
@@ -95,6 +96,12 @@ def describe(name: str, args: dict, is_plugin: bool = False) -> Optional[tuple[s
         # Letting Claude Code or Gemini CLI create and edit files in a folder.
         from actions import cli_helper
         return cli_helper.confirmation(args)
+
+    if name == "chat_reply":
+        # Typing a reply into the chat open on screen and pressing Enter. The
+        # module fixes the exact words here, so the banner shows what is sent.
+        from actions import chat_reply
+        return chat_reply.confirmation(args)
 
     if is_plugin:
         low = name.lower()

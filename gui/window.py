@@ -1119,7 +1119,17 @@ class MainWindow(QMainWindow):
 
     def _tick_clock(self):
         self._clock_lbl.setText(time.strftime("%H:%M:%S"))
-        self._date_lbl.setText(time.strftime("%a %d %b %Y"))
+        # A running timer takes the date's place under the clock: "TEA 09:41".
+        try:
+            from core import timers
+            countdown = timers.hud_line()
+        except Exception:
+            countdown = ""
+        colour = C.ACC if countdown else C.PRI_DIM
+        if colour != getattr(self, "_date_colour", C.PRI_DIM):
+            self._date_colour = colour
+            self._date_lbl.setStyleSheet(f"color: {colour}; background: transparent;")
+        self._date_lbl.setText(countdown or time.strftime("%a %d %b %Y"))
 
     @staticmethod
     def _subtitle(display: str) -> str:

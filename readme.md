@@ -58,6 +58,7 @@ it, and `./vision.sh --update` pulls the latest code first. More in
 | Kill an app | "Kill Spotify". Force-quits every process of that app, for when closing is not enough. If the name matches several apps, it asks which one. |
 | Window layout | With the GNOME Tiling Shell extension: tile left, right, top, bottom or centre, span tiles, untile, focus the next tile, cycle layouts, open the layout editor. |
 | Move windows between monitors | "Move this window to monitor 3", "move it to the right screen". |
+| Workspace scenes | "Save a scene called work: terminal on monitor 1 on the left, Chrome on monitor 2, Spotify on monitor 3", then "start my work scene". The apps open one after another, each on its monitor and tile; ones already running are moved there instead. Add or remove an app, list scenes or delete one by voice. Saving over a scene and deleting one can be undone. |
 | Window shortcuts | Fullscreen, minimise, maximise, snap left or right, switch window, show desktop, lock the screen, open settings or the file manager. |
 
 ### Screen, keyboard and mouse (works on Wayland)
@@ -104,6 +105,8 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 |---|---|
 | Google Calendar | "What's on today?", "when is my dentist appointment?", "add lunch with Maria tomorrow at 2", "move number 2 to Friday", "delete the dentist". Reads all your calendars and mentions overlaps. One-time setup in [docs/VISION.md](docs/VISION.md#google-calendar). |
 | Phone reminders | "Remind me on my phone an hour before" adds a Google reminder to the event. |
+| Timers | "Timer for 10 minutes", "tea timer 4 minutes", "how long is left?", "cancel the tea timer". Several can run at once. When one ends you get a notification, a sound and a spoken sentence, and the countdown shows under the clock. A running timer survives a restart of Vision. |
+| Pomodoro | "Start a focus session": 25 minutes of work and 5 of break, four times, announced at each change. Lengths and rounds can be said ("50 minutes work, 10 break, 3 rounds"). "Stop the session" ends it. |
 | PC reminders | "Remind me at 6 to call mum". A desktop notification at that time, also said aloud if Vision is running. |
 | Routines | Things Vision does on its own at a time you choose: once, on chosen weekdays, monthly, every N minutes between two times, at startup, or after a quiet spell. A routine can say a fixed sentence, carry out an instruction ("tell me the weather and my agenda"), or start a background task. Set them by voice. |
 | Opening briefing | Greets you, gives the time, recaps last time and reads the news. It is a routine, so you can change its topic or time. |
@@ -133,6 +136,8 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 | Code helper | Writes, edits, explains or runs a single code file. |
 | Steam and Epic games | Lists installed games, updates or installs them, shows download status, and schedules updates for the night. |
 | Messages | "Send Anna on WhatsApp: running late". Also Telegram and other apps. Asks first, and says plainly when it could not confirm the message arrived. |
+| Reply in the open chat | With a conversation open on screen, in any chat app or web chat: "what did she write?", "draft a reply saying I'll be ten minutes late", "send it". The draft is shown and read to you first. Sending asks first, with the exact words on the banner, and it sends nothing if a different chat is open by then. |
+| Spotify by name | "Play Radiohead on Spotify", "play the album OK Computer", "put on Discover Weekly", "what song is this?". It reads back what Spotify is playing before saying it worked. Needs the Spotify desktop app and a one-time setup in [docs/VISION.md](docs/VISION.md#spotify). |
 
 ### Memory
 
@@ -159,7 +164,7 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 | Feature | What it does |
 |---|---|
 | HUD | Glass panels, CPU / RAM / GPU / network gauges, an activity log, and a TASKS / ROUTINES panel. |
-| Face or reactor | An animated head with real lip-sync, blinking and gaze, or a 3-D reactor core. Both drawn in software, no GPU needed. |
+| Face or reactor | An animated head with real lip-sync, blinking and gaze, or a 3-D reactor core. Both drawn in software, no GPU needed. While nothing is happening it redraws less often, and less again while asleep or muted, to leave the CPU alone. |
 | Theme | Recolour the whole window from a colour wheel or a hex code. |
 | Customise | Change the assistant's name, your name, the voice and the colour (SETUP → CUSTOMISE ASSISTANT). |
 | Audio devices | Pick the microphone and speakers by name, test each with a live meter or a tone, and set the output volume (SETUP → AUDIO DEVICES). |
@@ -170,7 +175,7 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 
 | Feature | What it does |
 |---|---|
-| Asks first | Deleting files, sending a message, starting a coding job, deleting a calendar event or inviting people, and letting a helper write files all wait for you to press CONFIRM on the banner. So do restart, shutdown and turning WiFi off. The banner names exactly what will happen and expires after 90 seconds. |
+| Asks first | Deleting files, sending a message, replying in a chat on screen, starting a coding job, deleting a calendar event or inviting people, and letting a helper write files all wait for you to press CONFIRM on the banner. So do restart, shutdown and turning WiFi off. The banner names exactly what will happen and expires after 90 seconds. |
 | Closing Vision | "Shut down" or "close Vision" closes Vision itself straight away, after a short goodbye. No click needed. |
 | Honest results | Every action reports `done` (checked), `unverified` (sent but not confirmed), `failed`, `ask` or `started`. Vision never says something worked when it could not check. |
 | Outside content is data | Web pages, documents and calendar text reach the model marked as data, so an instruction hidden in a page is reported, not followed. |
@@ -212,6 +217,9 @@ vision/
 │   ├── web_search.py            # Search, news, research, price, compare
 │   ├── google_calendar.py       # Google Calendar
 │   ├── reminder.py              # Reminders on this PC
+│   ├── timer.py                 # Countdown timers and pomodoro
+│   ├── scenes.py                # Workspace scenes
+│   ├── chat_reply.py            # Read and reply in the chat open on screen
 │   ├── routines.py              # Routines and quiet hours
 │   ├── background_tasks.py      # Background tasks and research
 │   ├── cli_helper.py            # Claude Code and Gemini CLI helpers
@@ -227,7 +235,8 @@ vision/
 │   ├── game_updater.py          # Steam and Epic
 │   └── screen_processor.py, system_monitor.py, background_monitor.py,
 │       proactive.py, youtube_video.py   # helpers used by the above
-├── plugins/               # Your own extra tools; _template.py shows how
+├── plugins/               # Extra tools, one file each; _template.py shows how
+│   └── spotify.py               # Play by name in the Spotify app
 ├── agents/                # Background agents as Markdown files
 ├── core/
 │   ├── ask_first.py             # Which tool calls wait for CONFIRM
@@ -237,6 +246,7 @@ vision/
 │   ├── gemini.py                # Every background model call, with fallbacks
 │   ├── tasks/                   # Background task engine
 │   ├── routines/                # Routine engine
+│   ├── timers.py                # Timer engine
 │   ├── undo.py, outcome.py, appidentity.py, paths.py, ...
 │   └── prompt.txt               # The assistant's instructions
 ├── providers/             # Optional engines: Whisper, local models, Piper
@@ -260,6 +270,7 @@ python -m providers._tests                # engines and tool declarations
 python -m core._wayland_tests             # Wayland screen, mouse, keyboard, windows
 python -m actions._google_calendar_tests  # Google Calendar
 python -m actions._cli_helper_tests       # Claude Code and Gemini CLI helpers
+python -m actions._features_tests         # Timers, scenes, Spotify, chat reply
 ```
 
 ---
@@ -273,13 +284,16 @@ Everything stays on your PC except what is sent to the services you use.
 | API keys and settings | `config/api_keys.json`, plain text. Treat it like a password file. |
 | What Vision remembers about you | `memory/long_term.json` |
 | Routines and quiet hours | `memory/routines.json` |
+| Scenes and running timers | `memory/scenes.json`, `memory/timers.json` |
 | Background tasks and reports | `memory/tasks/` and `reports/` |
 | Google Calendar sign-in | `~/.config/vision/google_calendar_token.json` |
 | Helper answers | `~/.vision/helpers/` |
 
 All of these are kept out of git. While a Gemini Live session is open, your
 voice is streamed to Google. Screenshots and camera frames go to Gemini when
-you ask about them. With a local engine, nothing leaves the PC.
+you ask about them, and so does a picture of the screen when you ask Vision to
+read or reply in a chat. A Spotify search sends the name you asked for to
+Spotify. With a local engine, nothing leaves the PC.
 
 ---
 
