@@ -184,6 +184,11 @@ class EchoGuard:
         return max(_MIN_USER, self._head * _HEAD_MULT)
 
     @property
+    def warm(self) -> bool:
+        """True once enough of this room's echo has been heard to judge."""
+        return len(self._residuals) >= _WARMUP
+
+    @property
     def loud_bar(self) -> float:
         """The mic level a block must reach right now to count as a voice on
         loudness alone."""
