@@ -898,6 +898,11 @@ def paint_icon(p: QPainter, kind: str, r: QRectF, col: QColor) -> None:
     elif kind == "send":
         p.drawPolygon(QPolygonF([QPointF(cx - s * 0.6, cy - s * 0.7), QPointF(cx + s * 0.75, cy),
                                  QPointF(cx - s * 0.6, cy + s * 0.7), QPointF(cx - s * 0.3, cy)]))
+    elif kind == "terminal":
+        p.drawRoundedRect(QRectF(cx - s * 0.85, cy - s * 0.65, s * 1.7, s * 1.3), 2, 2)
+        p.drawLine(QLineF(cx - s * 0.5, cy - s * 0.3, cx - s * 0.15, cy))
+        p.drawLine(QLineF(cx - s * 0.15, cy, cx - s * 0.5, cy + s * 0.3))
+        p.drawLine(QLineF(cx + s * 0.05, cy + s * 0.3, cx + s * 0.5, cy + s * 0.3))
     elif kind == "plus":
         p.drawLine(QLineF(cx - s * 0.6, cy, cx + s * 0.6, cy))
         p.drawLine(QLineF(cx, cy - s * 0.6, cx, cy + s * 0.6))

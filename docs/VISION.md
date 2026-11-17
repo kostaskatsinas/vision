@@ -24,7 +24,8 @@ Shell window actions, and opening apps or moving windows onto a chosen monitor
 it does.
 
 Not yet tried on the target machine: the window and monitor actions, the local
-model, and Gemini CLI as a helper (its sign-in fails there).
+model, Gemini CLI as a helper (its sign-in fails there), and the built-in
+terminals (see Built-in terminals for what to check).
 
 ## Target machine
 
@@ -312,6 +313,64 @@ give another limit (at most 60), and two can run at once.
 
 Both tools must be signed in on this PC: run `claude` or `gemini` once in a
 terminal. Each job counts against that subscription's usage limits.
+
+### Built-in terminals
+
+Real terminals inside the Vision window, for working in Claude Code or Gemini
+CLI yourself. They are separate from the helpers above: a helper is a hidden
+job Vision starts and reports on, a terminal is one you type in.
+
+| Do | What happens |
+|---|---|
+| Click the terminal button at the top (next to the gear and the sliders) | The terminals take the place of the face. Click again, or HIDE, to get the face back; the terminals keep running. |
+| ＋ CLAUDE, ＋ GEMINI, ＋ SHELL | Opens a terminal with that program. Two fit, side by side; drag the gap between them to resize. |
+| "Open a Claude terminal" / "open a Gemini terminal" / "open a terminal in ~/vision" | The same, by voice. |
+| "Hide the terminals" / "show the terminals" | Switches between the terminals and the face. |
+| ✕ on a terminal, or `exit` in its shell | Closes that terminal and stops what runs in it. |
+
+How it works: each terminal is your own login shell, started interactively on
+a pseudo-terminal, the way a terminal app does it. `claude` or `gemini` is run
+inside that shell, so your `~/.bashrc`, PATH and sign-ins apply, and when the
+program exits you are left at a normal prompt. Vision's own Python environment
+(`.venv`) is taken off the PATH, so `python` there is your normal one. A
+terminal starts in your home folder unless you name another by voice.
+
+Keys: everything goes to the terminal while it has the focus, including
+Escape (which otherwise stops Vision speaking) and Tab. F4 (mute), F11
+(fullscreen) and the push-to-talk chord still belong to Vision.
+
+| Key | Does |
+|---|---|
+| Ctrl+Shift+C / Ctrl+Shift+V | Copy the selection / paste. Shift+Insert and a middle click paste too. |
+| Drag with the mouse | Select text. Hold Shift if the program inside uses the mouse itself. |
+| Mouse wheel, Shift+PageUp / Shift+PageDown | Scroll back (5000 lines are kept). |
+| Shift+Enter or Alt+Enter | New line without sending, in Claude Code and Gemini CLI. |
+| Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Larger, smaller, normal text. |
+
+Limits and safety:
+
+- Only you type there. The `terminal` tool can open, show and hide; it has no
+  way to send text to a terminal, read one or close one. What Claude Code or
+  Gemini CLI do inside is under their own permission prompts, not Vision's
+  ask-first rule, exactly as in any other terminal.
+- Closing Vision closes the terminals and stops what runs in them, without
+  asking. Finish or save a session before you quit.
+- The escape-code work is done by `pyte` (a small pure-Python package, added
+  to `requirements.txt`; `./vision.sh` installs it on the next start). PyQt6
+  has no terminal widget of its own, and writing that part by hand would be
+  much more code to get wrong. It does not draw dim text as dim, and has no
+  images or clickable links.
+
+Code: `core/terminal_session.py` (shell and screen), `gui/terminal.py` (the
+widget), `actions/terminal.py` (voice). Tests: `python -m actions._terminal_tests`.
+
+Checked without a desktop: a real shell on a real pseudo-terminal, Claude Code
+2.1 and Gemini CLI 0.68 starting and drawing their first screens inside the
+widget, arrow keys, Escape, Tab, Ctrl+C, paste, scrollback, resize, two
+terminals at once, and the whole window on Qt's offscreen platform. To check
+on the target machine: the look and text size on the real screen, typing Greek
+and accented letters, copy and paste with other apps, Claude Code and Gemini
+CLI signed in and doing a real job, and opening a terminal by voice.
 
 ### Local model (offline fallback)
 

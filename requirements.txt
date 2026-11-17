@@ -85,6 +85,7 @@ pdfplumber                   # file_processor — PDF text and tables
 PyPDF2                       # file_processor — PDF fallback reader
 python-docx                  # file_processor — .docx reading
 pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
+pyte>=0.8.2,<0.9             # built-in terminals — reads terminal escape codes
 
 # ── Optional: heavy extras, install only if you want the feature ──────────────
 # Left out on purpose — together they are several hundred megabytes, which is a
