@@ -45,7 +45,6 @@ def _use_temp_store() -> Path:
     identity.IDENTITY_DIR = d
     identity.FACE_FILE = d / "face.npy"
     identity.VOICE_FILE = d / "voice.npy"
-    identity._face_ok_until = 0.0
     return d
 
 
@@ -306,6 +305,22 @@ def test_greet_only_owner():
         identity._last_greet = None
 
 
+def test_face_match_not_reused():
+    _use_temp_store()
+    identity._save(identity.FACE_FILE, [np.array([1, 0], np.float32)])
+    frames = [[np.array([1, 0], np.float32)], [np.array([0, 1], np.float32)]]
+    real = identity._frames, identity.face_embeddings
+    identity._frames = lambda seconds: iter([object()])
+    identity.face_embeddings = lambda frame: frames.pop(0)
+    try:
+        first = identity.check_face()[0]
+        second = identity.check_face()[0]
+    finally:
+        identity._frames, identity.face_embeddings = real
+    check("owner matched", first is True)
+    check("next request looks again (guest refused)", second is False, str(second))
+
+
 def test_real_face_model():
     models, faces = os.environ.get("IDENTITY_MODELS"), os.environ.get("IDENTITY_FACES")
     if not models or not faces:
@@ -328,7 +343,8 @@ def main() -> int:
               test_last_utterance, test_quiet_room_is_not_speech,
               test_listen_while_learning, test_relearn_needs_owner,
               test_missing_engine_asks_before_install, test_vision_close_not_locked,
-              test_tool_declared, test_greet_only_owner, test_real_face_model):
+              test_tool_declared, test_greet_only_owner, test_face_match_not_reused,
+              test_real_face_model):
         try:
             t()
         except Exception as e:

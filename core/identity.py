@@ -106,10 +106,6 @@ PAUSE_SECONDS  = 1.2
 MIN_VOICED     = 1.0
 MAX_VOICED     = 8.0
 
-# A face match is reused for this long, so two banners in a row do not open
-# the camera twice.
-FACE_REUSE_SECONDS = 20.0
-
 # Do not greet again on every wake within this long.
 GREET_GAP_SECONDS = 30 * 60
 
@@ -219,8 +215,6 @@ def forget(which: str = "all") -> str:
                 gone.append(kind)
             except OSError as e:
                 return f"Could not delete the {kind} data: {e}"
-    global _face_ok_until
-    _face_ok_until = 0.0
     if not gone:
         return "There was nothing to forget."
     left = [k for k, f in (("face", has_face), ("voice", has_voice)) if f()]
@@ -339,18 +333,16 @@ def _frames(seconds: float):
         cap.release()
 
 
-_face_ok_until = 0.0
-
-
 def check_face(seconds: float = 2.5) -> tuple[Optional[bool], float, str]:
     """(matched, best score, note). matched is None when no face is learned
-    or the camera could not be used."""
-    global _face_ok_until
+    or the camera could not be used.
+
+    Always looks again: a match is never reused for a later request, or a
+    guest could ride on the owner's last match (for example to replace the
+    stored face with their own)."""
     ref = _reference(FACE_FILE)
     if ref is None:
         return None, 0.0, "no face learned"
-    if time.monotonic() < _face_ok_until:
-        return True, 1.0, "seen a moment ago"
     best, seen = 0.0, False
     try:
         for frame in _frames(seconds):
@@ -358,7 +350,6 @@ def check_face(seconds: float = 2.5) -> tuple[Optional[bool], float, str]:
                 seen = True
                 best = max(best, _cos(ref, emb))
             if best >= face_threshold():
-                _face_ok_until = time.monotonic() + FACE_REUSE_SECONDS
                 return True, best, "face matched"
     except Exception as e:
         return None, 0.0, f"camera: {e}"
@@ -386,8 +377,6 @@ def learn_face() -> str:
         return ("I could not see one face clearly enough. Sit in front of the "
                 "camera alone, in good light, and ask again.")
     _save(FACE_FILE, got)
-    global _face_ok_until
-    _face_ok_until = 0.0
     _log(f"Face learned from {len(got)} frames.")
     return f"Learned your face from {len(got)} frames."
 
