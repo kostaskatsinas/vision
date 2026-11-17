@@ -208,13 +208,19 @@ def _launch_and_verify(
     before: set[int],
     target_mon: dict | None = None,
     tile_spec: str = "",
-) -> None:
+    quiet: bool = False,
+) -> str:
     """The part that takes seconds. Speaks ONLY when something needs saying.
+
+    Returns "" when the application appeared, otherwise what went wrong. With
+    `quiet` nothing is said aloud: the caller (a scene opening several apps
+    in a row) reports the trouble itself, once, at the end.
 
     Silence means it worked: the window is on the user's screen and a second
     announcement over the top of it is noise — the same reasoning
     whatsapp_call.py applies to a phone that is already ringing.
     """
+    say = (lambda _player, _text: None) if quiet else _say
     try:
         if target_mon is not None and _on_wayland():
             try:
@@ -231,6 +237,7 @@ def _launch_and_verify(
             spoken, before, timeout=_LAUNCH_TIMEOUT
         )
         if appeared is not None:
+            not_tiled = ""
             if (target_mon is not None or tile_spec) and _on_wayland():
                 try:
                     from core import wayland_desktop
@@ -246,14 +253,15 @@ def _launch_and_verify(
                     if tile_spec and focused:
                         wayland_desktop.tiling_shell_action("tile", tile_spec)
                     elif tile_spec:
-                        _say(player, f"[SYSTEM] {appeared.label} opened, but its "
-                             "window could not be brought to the front, so it "
-                             "was not tiled. Tell the user briefly.")
+                        not_tiled = (f"{appeared.label} opened, but its window "
+                                     "could not be brought to the front, so it "
+                                     "was not tiled")
+                        say(player, f"[SYSTEM] {not_tiled}. Tell the user briefly.")
                 except Exception as exc:
                     print(f"[open_app] post-launch monitor/tile step failed: {exc}")
             mon_note = f" on monitor {target_mon['number']}" if target_mon else ""
             _log(player, f"VISION: {appeared.label} is open{mon_note}.")
-            return
+            return not_tiled
 
         if not requested:
             trouble = (f"{spoken} could not be started - nothing on this system "
@@ -265,12 +273,14 @@ def _launch_and_verify(
                        f"installed under that name")
 
         _log(player, f"VISION: {trouble}")
-        _say(player, "Tell the user, in one short sentence in their own "
-                     f"language: {trouble}")
+        say(player, "Tell the user, in one short sentence in their own "
+                    f"language: {trouble}")
+        return trouble
     except Exception as exc:
         print(f"[open_app] {type(exc).__name__}: {exc}")
-        _say(player, "Tell the user, in one short sentence in their own "
-                     f"language: opening {spoken} failed - {exc}")
+        say(player, "Tell the user, in one short sentence in their own "
+                    f"language: opening {spoken} failed - {exc}")
+        return f"opening {spoken} failed - {exc}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,6 +288,18 @@ def _launch_and_verify(
 # ─────────────────────────────────────────────────────────────────────────────
 def open_app(parameters=None, response=None, player=None,
              session_memory=None) -> str:
+    return _open(parameters, player, wait=False)
+
+
+def open_app_and_wait(parameters=None, player=None) -> str:
+    """open_app, but it returns only once the application is confirmed open
+    (or has failed), and it says nothing aloud. For callers that open several
+    applications one after another: two launches at once would fight over the
+    pointer and the front window, which is how each one is placed."""
+    return _open(parameters, player, wait=True)
+
+
+def _open(parameters, player, wait: bool) -> str:
     params = parameters or {}
     spoken = (params.get("app_name") or "").strip()
     monitor_spec = str(params.get("monitor") or params.get("screen") or "").strip()
@@ -361,6 +383,19 @@ def open_app(parameters=None, response=None, player=None,
         f" on monitor {monitor_spec}" if monitor_spec else ""
     )
     _log(player, f"VISION: Opening {spoken}{mon_label}…")
+
+    if wait:
+        trouble = _launch_and_verify(player, spoken, launcher_name, before,
+                                     target_mon, tile_spec, quiet=True)
+        if trouble and "opened, but" in trouble:
+            return outcome.unverified("open_app", trouble, app=spoken)
+        if trouble:
+            return outcome.failed("open_app", trouble, app=spoken)
+        return outcome.done(
+            "open_app", app=spoken,
+            monitor=target_mon["number"] if target_mon else (monitor_spec or None),
+            tile=tile_spec or None, verified=True,
+        )
 
     threading.Thread(
         target=_launch_and_verify,
