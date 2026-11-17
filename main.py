@@ -79,6 +79,7 @@ from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
+    get_idle_sleep_minutes,
 )
 from core                     import gemini as _gemini
 from core.plugin_loader        import discover_plugins
@@ -97,6 +98,15 @@ from core.wake_word            import (
 # How long the assistant stays awake with no user speech before it auto-sleeps
 # again (wake-word mode only).
 WAKE_SLEEP_TIMEOUT = 120.0   # seconds (2 minutes)
+# With the wake word OFF, the AUTO-SLEEP setting in CONTROLS decides instead
+# (memory/config_manager.get_idle_sleep_minutes, 1 hour by default).
+
+
+def _fmt_minutes(minutes: int) -> str:
+    if minutes % 60 == 0:
+        h = minutes // 60
+        return "1 hour" if h == 1 else f"{h} hours"
+    return f"{minutes} minutes"
 
 from core.paths import base_dir as get_base_dir, read_gemini_api_key
 
@@ -684,6 +694,9 @@ class VisionLive:
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
+        # Anything else the USER did to Vision: a typed command, the push-to-talk
+        # key, waking it. The auto-sleep clocks count from the later of the two.
+        self._last_user_activity = self._last_user_speech
         self._session_log: list[str] = []          # conversation turns for end-of-session summary
 
         self._enhanced_live = True  # proactive audio; auto-disabled if the server rejects it
@@ -837,21 +850,79 @@ class VisionLive:
         self.ui.set_state("SLEEPING")
         self.ui.write_log(f"SYS: Sleeping — {reason}. Say '{WAKE_PHRASE}' to wake me.")
 
+    def _note_user_activity(self) -> None:
+        """The user did something to Vision other than speak (typed, pressed
+        the push-to-talk key). Restarts both auto-sleep clocks."""
+        self._last_user_activity = time.monotonic()
+
+    def _quiet_seconds(self) -> float:
+        """How long since the user last spoke to Vision or used it.
+
+        Only the USER counts. Vision's own speech does not: the idle check-in
+        routine speaks every 20 minutes of quiet, and if that counted, Vision
+        would never reach an hour and never sleep."""
+        last = max(self._last_user_speech,
+                   getattr(self, "_last_user_activity", 0.0))
+        return time.monotonic() - last
+
+    async def _arm_one_sleep(self) -> str | None:
+        """Get ready to sleep with the wake word OFF: start the detector and turn
+        the wake word on for this one sleep only (wake() turns it back off; it
+        is never saved). Returns None when ready, or why it cannot sleep: with
+        no working wake word nothing could wake it by voice."""
+        if self._wake_enabled:
+            if not await asyncio.to_thread(self._ensure_wake_detector):
+                return ("the wake word could not start, so nothing could wake me by "
+                        "voice. Turning WAKE WORD off and on in CONTROLS sets it up again.")
+            return None
+        if not wake_is_ready():
+            return ("the wake word is not set up, so nothing could wake me by "
+                    "voice. It is set up from CONTROLS, WAKE WORD.")
+        if not await asyncio.to_thread(self._ensure_wake_detector):
+            return ("the wake word could not start, so nothing could wake me by "
+                    "voice. Turning WAKE WORD off and on in CONTROLS sets it up again.")
+        self._wake_enabled = True
+        self._wake_for_one_sleep = True
+        return None
+
     async def _run_sleep_watch(self) -> None:
-        """Auto-sleep after the configured silence window (wake-word mode only)."""
+        """Auto-sleep: after 2 minutes of quiet with the wake word on, and after
+        the AUTO-SLEEP time (1 hour by default) with it off."""
         while True:
             await asyncio.sleep(5)
-            if not self._wake_enabled or not self._awake:
-                continue
+            try:
+                await self._sleep_watch_tick()
+            except Exception as e:
+                print(f"[Wake] sleep watch: {e!r}")
+
+    async def _sleep_watch_tick(self) -> None:
+        if not self._awake or getattr(self, "_ptt_held", False):
+            return
+        with self._speaking_lock:
+            if self._is_speaking:
+                return
+        quiet = self._quiet_seconds()
+        if self._wake_enabled:
             # Asleep with no detector running is asleep for good.
             if not (self._wake_detector and self._wake_detector.ready):
-                continue
-            with self._speaking_lock:
-                speaking = self._is_speaking
-            if speaking:
-                continue
-            if (time.monotonic() - self._last_user_speech) > self._wake_sleep_timeout:
+                return
+            if quiet > self._wake_sleep_timeout:
                 self.sleep(reason="no speech for 2 minutes")
+            return
+        minutes = get_idle_sleep_minutes()
+        if minutes <= 0 or quiet < minutes * 60:
+            return
+        # Said once per quiet stretch, not every 5 seconds.
+        stretch = round(time.monotonic() - quiet, 3)
+        if getattr(self, "_idle_sleep_refused", None) == stretch:
+            return
+        why = await self._arm_one_sleep()
+        if why:
+            self._idle_sleep_refused = stretch
+            self.ui.write_log(f"SYS: Quiet for {_fmt_minutes(minutes)}, but staying "
+                              f"awake: {why}")
+            return
+        self.sleep(reason=f"quiet for {_fmt_minutes(minutes)}")
 
     # ── Wake word: UI callbacks (called from the Qt thread) ──────────────────
 
@@ -1268,6 +1339,7 @@ class VisionLive:
         if self._wake_enabled and not self._awake:
             self.ui.write_log(f"SYS: I'm asleep — say '{WAKE_PHRASE}' or tap WAKE NOW first.")
             return
+        self._note_user_activity()
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
@@ -1332,6 +1404,7 @@ class VisionLive:
         """Chord pressed or released — may arrive on the hotkey thread."""
         self._ptt_held = held
         if held:
+            self._note_user_activity()
             # Holding the key is also a way to wake it, so push-to-talk works
             # without having to say the wake word first.
             if self._wake_enabled and not self._awake:
@@ -1715,24 +1788,10 @@ class VisionLive:
         once would hand the mic to the wake word detector while the speakers are
         still playing the reply, and a reply that says the assistant's name
         would wake it straight back up."""
-        not_asleep = ("Not asleep, still listening: {why} Tell the user that in one "
-                      "short sentence. Do not call any tools.")
-        if not self._wake_enabled:
-            if not wake_is_ready():
-                return not_asleep.format(
-                    why="the wake word is not set up, so nothing could wake me by "
-                        "voice. It is set up from CONTROLS, WAKE WORD.")
-            if not await asyncio.to_thread(self._ensure_wake_detector):
-                return not_asleep.format(
-                    why="the wake word could not start, so nothing could wake me by "
-                        "voice. Turning WAKE WORD off and on in CONTROLS sets it up again.")
-            # On for this one sleep only; wake() turns it back off. Not saved.
-            self._wake_enabled = True
-            self._wake_for_one_sleep = True
-        elif not await asyncio.to_thread(self._ensure_wake_detector):
-            return not_asleep.format(
-                why="the wake word could not start, so nothing could wake me by "
-                    "voice. Turning WAKE WORD off and on in CONTROLS sets it up again.")
+        why = await self._arm_one_sleep()
+        if why:
+            return (f"Not asleep, still listening: {why} Tell the user that in one "
+                    f"short sentence. Do not call any tools.")
         if self._turn_done_event:
             self._turn_done_event.clear()     # set again when the reply ends
         self._keep_task(asyncio.create_task(self._sleep_after_reply()))

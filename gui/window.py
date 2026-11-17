@@ -1620,6 +1620,10 @@ class MainWindow(QMainWindow):
         self._wake_btn.setStyleSheet(self._BTN_DIM)
         self._wake_sleep_btn.hide()
 
+        self._idle_sleep_btn = _row(QPushButton())
+        self._idle_sleep_btn.clicked.connect(self._cycle_idle_sleep)
+        self._refresh_idle_sleep_btn()
+
         self._ptt_btn = _row(QPushButton())
         self._ptt_btn.clicked.connect(self._toggle_ptt)
         self._refresh_talk_btns()
@@ -2361,6 +2365,42 @@ class MainWindow(QMainWindow):
             self._wake_btn.setText("🎙  WAKE WORD: OFF")
             self._wake_btn.setStyleSheet(_off)
             self._wake_sleep_btn.hide()
+
+    # ── Auto-sleep after a quiet stretch (wake word off) ─────────────────────
+
+    @staticmethod
+    def _idle_sleep_label(minutes: int) -> str:
+        if minutes <= 0:
+            return "OFF"
+        if minutes % 60 == 0:
+            return "1 HOUR" if minutes == 60 else f"{minutes // 60} HOURS"
+        return f"{minutes} MIN"
+
+    def _refresh_idle_sleep_btn(self):
+        if not hasattr(self, "_idle_sleep_btn"):
+            return
+        from memory.config_manager import get_idle_sleep_minutes
+        m = get_idle_sleep_minutes()
+        self._idle_sleep_btn.setText(f"💤  AUTO-SLEEP: {self._idle_sleep_label(m)}")
+        self._idle_sleep_btn.setStyleSheet(btn_css("on" if m > 0 else "off"))
+        self._idle_sleep_btn.setToolTip(
+            "With the wake word off, Vision goes to sleep after this long with "
+            "nobody talking to it, and wakes when you say its name. Needs the wake "
+            "word downloaded. With the wake word on, it sleeps after 2 minutes.")
+
+    def _cycle_idle_sleep(self):
+        """OFF → 30 MIN → 1 HOUR → 2 HOURS → OFF. Read by the assistant on its
+        next check, so it takes effect without a restart."""
+        from memory.config_manager import (IDLE_SLEEP_CHOICES, get_idle_sleep_minutes,
+                                           save_idle_sleep_minutes)
+        cur = get_idle_sleep_minutes()
+        later = [c for c in IDLE_SLEEP_CHOICES if c > cur]
+        want = later[0] if later else IDLE_SLEEP_CHOICES[0]
+        save_idle_sleep_minutes(want)
+        self._refresh_idle_sleep_btn()
+        self._log.append_log(
+            f"SYS: Auto-sleep after {self._idle_sleep_label(want).lower()} of quiet."
+            if want else "SYS: Auto-sleep off: Vision keeps listening until told to sleep.")
 
     def _refresh_talk_btns(self):
         """Repaint the push-to-talk row from the saved setting."""
