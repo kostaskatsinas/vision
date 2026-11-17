@@ -179,6 +179,7 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 | Feature | What it does |
 |---|---|
 | Asks first | Deleting files, sending a message, replying in a chat on screen, starting a coding job, deleting a calendar event or inviting people, and letting a helper write files all wait for you to press CONFIRM on the banner. So do restart, shutdown and turning WiFi off. The banner names exactly what will happen and expires after 90 seconds. |
+| Knows your face and voice | Say "learn my face" (look at the webcam for a few seconds) and "learn my voice" (talk or read the text on screen for about 20 seconds). From then on everything behind the CONFIRM banner only goes ahead when Vision recognises you: it checks the voice that gave the command and, if that is not enough, looks through the camera once. Anyone else is told no and nothing happens. Vision also greets you by name when it wakes and sees you. "Forget my face" / "forget my voice" deletes what it learned. Only numbers are stored, on this PC. See [docs/VISION.md](docs/VISION.md#face-and-voice). |
 | Closing Vision | "Shut down" or "close Vision" closes Vision itself straight away, after a short goodbye. No click needed. |
 | Honest results | Every action reports `done` (checked), `unverified` (sent but not confirmed), `failed`, `ask` or `started`. Vision never says something worked when it could not check. |
 | Outside content is data | Web pages, documents and calendar text reach the model marked as data, so an instruction hidden in a page is reported, not followed. |
@@ -246,6 +247,7 @@ vision/
 ├── core/
 │   ├── ask_first.py             # Which tool calls wait for CONFIRM
 │   ├── confirm.py               # The CONFIRM / CANCEL banner
+│   ├── identity.py              # Knows your face and voice; locks the banner to you
 │   ├── wayland_desktop.py       # Screen, mouse and keyboard on Wayland
 │   ├── wake_word.py             # "Vision" wake word
 │   ├── gemini.py                # Every background model call, with fallbacks
@@ -282,6 +284,7 @@ python -m actions._terminal_tests         # Built-in terminals
 python -m core._sleep_tests               # Going to sleep by voice
 python -m core._sleep_face_tests          # The face shuts its eyes and holds still asleep
 python -m core._window_control_tests      # Minimise / maximise the named app only
+python -m core._identity_tests            # Face and voice, and the owner lock
 ```
 
 ---
@@ -299,6 +302,7 @@ Everything stays on your PC except what is sent to the services you use.
 | Background tasks and reports | `memory/tasks/` and `reports/` |
 | Google Calendar sign-in | `~/.config/vision/google_calendar_token.json` |
 | Helper answers | `~/.vision/helpers/` |
+| Your face and voice (numbers only, no photos or audio) | `config/identity/` |
 
 All of these are kept out of git. While a Gemini Live session is open, your
 voice is streamed to Google. Screenshots and camera frames go to Gemini when

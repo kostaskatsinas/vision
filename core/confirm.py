@@ -79,6 +79,14 @@ def _log(msg: str) -> None:
             pass
 
 
+def _identity_locked() -> bool:
+    try:
+        from core.identity import locked
+        return locked()
+    except Exception:
+        return False
+
+
 def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
     """Park an irreversible action behind the on-screen gate.
 
@@ -92,6 +100,20 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
         # than silently performing something irreversible.
         return (f"I cannot confirm '{title}' right now because the interface is "
                 f"not available, so I have not done it.")
+
+    # Once Vision has learned the owner's face or voice, a banner is only shown
+    # when the owner asked for it (core/identity.py). Checked here, not in each
+    # action, so every risky action is covered by one line. Closing Vision is
+    # not a banner action and is never locked.
+    try:
+        from core import identity
+        refusal = identity.gate(title)
+    except Exception as e:           # identity.gate already catches its checks
+        refusal = (f"I could not check who asked for '{title}' ({e}), so I have "
+                   f"not done it.") if _identity_locked() else None
+    if refusal:
+        _log(f"SYS: Refused — {title}: not recognised as the owner.")
+        return refusal
 
     with _lock:
         _pending = _Pending(key=key, title=title, detail=detail,
