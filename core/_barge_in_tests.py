@@ -109,7 +109,7 @@ def make(guard=None) -> main.VisionLive:
     v._barge_in_on = True
     v._barge_run = 0
     v._barge_pending = False
-    v._barge_preroll = main.deque(maxlen=main._BARGE_PREROLL_BLOCKS)
+    v._barge_preroll = main.deque(maxlen=main._BARGE_PREROLL_COLD)
     v._echo = guard or EchoGuard()
     v._aec = NoAEC()
     v._aec_said = ""
@@ -322,6 +322,7 @@ def test_nothing_recorded_yet_is_not_a_voice():
 class ScriptedGuard:
     """Says 'voice' for the blocks it is told to, nothing else."""
     floor, threshold, required_blocks = 0.1, 0.15, 5
+    warm = True
 
     def __init__(self, answers):
         self.answers = list(answers)
@@ -383,9 +384,23 @@ def test_setting_read_at_each_reply():
         main.get_barge_in_enabled = orig
 
 
+def test_cold_guard_keeps_longer_preroll():
+    v = make(ScriptedGuard([False] * 16 + [True] * 5))
+    v._echo.warm = False
+    speak(v)
+    loop = NowLoop()
+    blk = np.zeros((main.CHUNK_SIZE, 1), dtype=np.int16)
+    for i in range(21):
+        if i == 16:
+            v._echo.warm = True       # the guard finishes learning mid-sentence
+        v._barge_in_check(blk, loop)
+    check("a voice noticed just after warm-up sends the longer pre-roll",
+          v.out_queue.qsize() == 21 and not v._is_speaking, str(v.out_queue.qsize()))
+
+
 def test_reply_ended_meanwhile():
     v = make(ScriptedGuard([]))
-    v._barge_preroll.append(np.zeros((4, 1), dtype=np.int16))
+    v._barge_preroll.append((np.zeros((4, 1), dtype=np.int16), True))
     v._barge_pending = True
     v._barge_in()
     check("a barge-in landing after the reply ended does nothing",
@@ -499,8 +514,9 @@ def test_engine_emits_interrupted_marker():
 class FakePactl:
     """Just enough of pactl's JSON for SystemAEC, with a log of commands."""
 
-    def __init__(self, pid="4242", rec_on="1", play_on="1"):
+    def __init__(self, pid="4242", rec_on="1", play_on="1", alsa_names=False):
         self.pid = pid
+        self.alsa_names = alsa_names
         self.cmds = []
         self.modules = []          # (index, argument)
         self.sinks = {"1": "alsa_output.speakers"}
@@ -523,6 +539,22 @@ class FakePactl:
                                      "argument": a} for i, a in self.modules])
             mine = {"application.process.id": self.pid}
             other = {"application.process.id": "1"}
+            if self.alsa_names:
+                # What Kostas's PC actually shows: PipeWire's ALSA plugin
+                # gives no process id, only the program's name.
+                mine = {"application.name": "PipeWire ALSA [python3.14]",
+                        "node.name": "alsa_playback.python3.14"}
+                mine_rec = {"application.name": "PipeWire ALSA [python3.14]",
+                            "node.name": "alsa_capture.python3.14"}
+                vlc = {"application.name": "VLC media player (LibVLC 3.0.24)",
+                       "application.process.id": "89871"}
+                if what == ["sink-inputs"]:
+                    return 0, _j.dumps([
+                        {"index": 1221, "sink": 1, "properties": vlc},
+                        {"index": 1484, "sink": int(self.input_sink), "properties": mine}])
+                if what == ["source-outputs"]:
+                    return 0, _j.dumps([{"index": 1476, "source": int(self.output_source),
+                                         "properties": mine_rec}])
             if what == ["sink-inputs"]:
                 return 0, _j.dumps([{"index": 7, "sink": int(self.input_sink), "properties": mine},
                                     {"index": 8, "sink": 1, "properties": other}])
@@ -550,7 +582,22 @@ class FakePactl:
 def _aec(fake, has_pactl=True):
     from core.aec import SystemAEC
     return SystemAEC(run=fake, pid=4242,
-                     which=lambda n: "/usr/bin/pactl" if has_pactl else None)
+                     which=lambda n: "/usr/bin/pactl" if has_pactl else None,
+                     programs=["python", "python3", "python3.14"])
+
+
+def test_aec_finds_streams_named_by_the_alsa_plugin():
+    f = FakePactl(alsa_names=True)
+    a = _aec(f)
+    check("streams with no process id are found by program name",
+          a.ensure() == "on", a.detail)
+    moves = [c for c in f.cmds if c[0].startswith("move-")]
+    check("...and only Vision's are moved, not VLC's",
+          moves == [["move-sink-input", "1484", "vision_aec_sink"],
+                    ["move-source-output", "1476", "vision_aec_source"]], str(moves))
+    from core.aec import _program_names
+    check("this interpreter's names include python3.N",
+          f"python{sys.version_info[0]}.{sys.version_info[1]}" in _program_names())
 
 
 def test_aec_routes_only_visions_streams():

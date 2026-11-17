@@ -34,6 +34,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from typing import Callable, Optional
@@ -56,9 +57,11 @@ class SystemAEC:
 
     def __init__(self, run: Callable[[list[str]], tuple[int, str]] = _run_pactl,
                  pid: Optional[int] = None,
-                 which: Callable[[str], Optional[str]] = shutil.which) -> None:
+                 which: Callable[[str], Optional[str]] = shutil.which,
+                 programs: Optional[list[str]] = None) -> None:
         self._run = run
         self._pid = str(pid if pid is not None else os.getpid())
+        self._programs = programs if programs is not None else _program_names()
         self._which = which
         self._lock = threading.Lock()
         self._module: Optional[str] = None     # index of the module we own
@@ -79,12 +82,29 @@ class SystemAEC:
         return data if isinstance(data, list) else []
 
     def _ours(self, kind: str) -> list[dict]:
-        out = []
-        for item in self._json(kind):
+        """Vision's own streams of this kind, newest first.
+
+        By process id when the stream carries one. PipeWire's ALSA plugin
+        (how PortAudio reaches the sound server on Ubuntu) does not: its
+        streams are only named after the program, "PipeWire ALSA [python3.14]"
+        with node "alsa_playback.python3.14". Measured on Kostas's PC.
+        """
+        items = self._json(kind)
+        by_pid, by_name = [], []
+        labels = set()
+        for prog in self._programs:
+            labels |= {f"PipeWire ALSA [{prog}]", f"ALSA plug-in [{prog}]",
+                       f"alsa_playback.{prog}", f"alsa_capture.{prog}"}
+        for item in items:
             props = item.get("properties") or {}
-            if str(props.get("application.process.id", "")) == self._pid:
-                out.append(item)
-        return out
+            pid = str(props.get("application.process.id", ""))
+            if pid == self._pid:
+                by_pid.append(item)
+            elif not pid and (props.get("application.name") in labels
+                              or props.get("node.name") in labels):
+                by_name.append(item)
+        out = by_pid or by_name
+        return sorted(out, key=lambda i: -int(i.get("index", 0) or 0))
 
     @staticmethod
     def _names(items: list) -> dict[str, str]:
@@ -183,6 +203,16 @@ class SystemAEC:
             except Exception:  # noqa: BLE001
                 pass
             self.status = "off"
+
+
+def _program_names() -> list[str]:
+    """What the ALSA plugin may call this process: the interpreter's name."""
+    names = {f"python{sys.version_info[0]}.{sys.version_info[1]}",
+             f"python{sys.version_info[0]}", "python"}
+    for exe in (sys.executable, os.path.realpath(sys.executable)):
+        if exe:
+            names.add(os.path.basename(exe))
+    return sorted(names)
 
 
 def describe(status: str, detail: str) -> str:

@@ -169,6 +169,10 @@ _TAIL_MARGIN = 0.25
 # whoever interrupted reach the model instead of being lost to the time it took
 # to be sure. 8 blocks of 64 ms is about half a second.
 _BARGE_PREROLL_BLOCKS = 8
+# While the echo check is still learning the room (the first second of the
+# first reply after launch) it cannot call anything a voice, so a sentence
+# begun then is noticed late. Keep about 1.5 s for that case.
+_BARGE_PREROLL_COLD = 24
 
 # How long a sent turn may go unanswered before the session is presumed dead.
 #
@@ -663,7 +667,7 @@ class VisionLive:
         self._barge_in_on          = True    # re-read from config at each reply
         self._barge_run            = 0       # consecutive blocks that were a voice
         self._barge_pending        = False   # an interrupt is on its way to the loop
-        self._barge_preroll        = deque(maxlen=_BARGE_PREROLL_BLOCKS)
+        self._barge_preroll        = deque(maxlen=_BARGE_PREROLL_COLD)
         # True while the server is still sending the current reply (audio has
         # arrived and its turn_complete has not). Only then does an interrupt
         # have anything left to throw away.
@@ -1575,7 +1579,7 @@ class VisionLive:
                 or self._ptt_enabled):
             # Push-to-talk interrupts with the key instead (see _on_ptt).
             return
-        self._barge_preroll.append(indata.copy())
+        self._barge_preroll.append((indata.copy(), self._echo.warm))
         if self._barge_pending:
             return
         try:
@@ -1598,8 +1602,11 @@ class VisionLive:
         try:
             with self._speaking_lock:
                 speaking = self._is_speaking
-            blocks = list(self._barge_preroll)
+            kept = list(self._barge_preroll)
             self._barge_preroll.clear()
+            if all(warm for _, warm in kept):
+                kept = kept[-_BARGE_PREROLL_BLOCKS:]
+            blocks = [b for b, _ in kept]
             if not speaking:
                 return          # the reply ended on its own meanwhile
             print(f"[VISION] ✋ Barge-in (echo floor {self._echo.floor:.2f}, "

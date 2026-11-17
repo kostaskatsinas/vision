@@ -246,7 +246,7 @@ def make_vision():
     v._out_level = 0.0
     v._last_user_speech = 0.0
     # Barge-in state that set_speaking touches (see core/_barge_in_tests.py).
-    v._barge_preroll = main.deque(maxlen=main._BARGE_PREROLL_BLOCKS)
+    v._barge_preroll = main.deque(maxlen=main._BARGE_PREROLL_COLD)
     v._barge_run = 0
     v._barge_in_on = False
     v._aec = type("NoAEC", (), {"due": lambda self, every=20.0: False})()
