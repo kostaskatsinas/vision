@@ -40,7 +40,7 @@ it, and `./vision.sh --update` pulls the latest code first. More in
 |---|---|
 | Real-time voice | A live spoken conversation through the Gemini Live API, in any language. |
 | Interrupt by voice | Start talking while Vision speaks and it stops within about a third of a second and listens; the first words you said are kept. On speakers this uses the desktop's own echo canceller (PipeWire's WebRTC `module-echo-cancel`, loaded through `pactl` for Vision's audio only and removed when Vision closes), so Vision does not stop at the sound of its own voice. With headphones it works without it. Turn it off in CONTROLS → INTERRUPT BY VOICE. With push-to-talk on, pressing the key interrupts instead. |
-| Wake word | Say **"Vision"** or **"Hey Vision"**. It sleeps until called, goes back to sleep after 2 minutes of quiet or when you tell it to ("go to sleep", "κοιμήσου"), and sends no audio while asleep. Detection runs on your PC (sherpa-onnx). Turn it on in CONTROLS → WAKE WORD. With the wake word off, Vision still puts itself to sleep after 1 hour with nobody talking to it, if the wake word is downloaded; change or turn this off with CONTROLS → AUTO-SLEEP (off, 30 min, 1 hour, 2 hours). |
+| Wake word | Say **"Vision"** or **"Hey Vision"**. It sleeps until called, goes back to sleep after 2 minutes of quiet or when you tell it to ("go to sleep", "κοιμήσου"), and sends no microphone audio while asleep (only a tenth of a second of generated silence every few seconds, so Gemini keeps the connection open). Detection runs on your PC (sherpa-onnx). Turn it on in CONTROLS → WAKE WORD. With the wake word off, Vision still puts itself to sleep after 1 hour with nobody talking to it, if the wake word is downloaded; change or turn this off with CONTROLS → AUTO-SLEEP (off, 30 min, 1 hour, 2 hours). |
 | Push-to-talk | Hold **Ctrl+Space** and the microphone opens; it is closed the rest of the time. |
 | Typing instead of talking | Type a request in the input box; it is handled the same way as speech. |
 | Five voices | Charon, Puck, Kore, Fenrir or Aoede, switched live from the window. |
@@ -287,6 +287,7 @@ python -m core._barge_in_tests            # Interrupting Vision by talking over 
 python -m core._sleep_face_tests          # The face shuts its eyes and holds still asleep
 python -m core._window_control_tests      # Minimise / maximise the named app only
 python -m core._identity_tests            # Face and voice, and the owner lock
+python -m core._keepalive_tests           # Keeping the Gemini session open while quiet
 ```
 
 ---
