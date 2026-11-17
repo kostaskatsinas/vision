@@ -254,8 +254,9 @@ def _ensure_network_access(*ports: int) -> None:
     # iptables needs root even to list, so it is only touched when blocking
     # can be seen. All chains are read, because INPUT may only jump to a
     # user-defined chain that does the dropping. The rule is inserted at the
-    # top of INPUT so it is reached before any such jump; -C keeps reruns from
-    # stacking duplicate rules.
+    # top of INPUT so it is reached before any such jump. An existing copy may
+    # sit below such a jump, so every copy is removed first: reruns leave
+    # exactly one rule, at the top.
     rules = _output(["iptables", "-S"])
     blocking = ("-P INPUT DROP", "-P INPUT REJECT", "-j DROP", "-j REJECT")
     if rules and any(b in rules for b in blocking):
@@ -263,8 +264,8 @@ def _ensure_network_access(*ports: int) -> None:
         for p in ports:
             rule = ["-p", "tcp", "--dport", str(p), "-j", "ACCEPT"]
             script_cmds.append(["sh", "-c",
-                                f"iptables -C INPUT {shlex.join(rule)} 2>/dev/null"
-                                f" || iptables -I INPUT 1 {shlex.join(rule)}"])
+                                f"while iptables -D INPUT {shlex.join(rule)} 2>/dev/null; do :; done;"
+                                f" iptables -I INPUT 1 {shlex.join(rule)}"])
         _apply("iptables", script_cmds)
     # Otherwise no active firewall was found, so there is nothing to open.
 
