@@ -72,9 +72,17 @@ def main() -> int:
         out, calls = _run(tmp, log)
         check("iptables: both ports accepted in one prompt",
               calls.count("PKEXEC") == 1
-              and "iptables -A INPUT -p tcp --dport 8765 -j ACCEPT" in calls
-              and "iptables -A INPUT -p tcp --dport 8766 -j ACCEPT" in calls,
+              and "iptables -I INPUT 1 -p tcp --dport 8765 -j ACCEPT" in calls
+              and "iptables -I INPUT 1 -p tcp --dport 8766 -j ACCEPT" in calls,
               calls)
+
+        _tool(tmp, "iptables",
+              f'[ "$1" = -S ] && {{ printf "%s\\n" "-P INPUT ACCEPT" "-A INPUT -j lan" '
+              f'"-A lan -p tcp --dport 8765 -j DROP"; exit 0; }}; '
+              f'[ "$1" = -C ] && exit 1; echo "iptables $*" >> {log}')
+        out, calls = _run(tmp, log)
+        check("iptables: a drop in a custom chain is found and the rule goes first",
+              "iptables -I INPUT 1 -p tcp --dport 8765 -j ACCEPT" in calls, out + calls)
 
         _tool(tmp, "iptables", '[ "$1" = -S ] && { echo "-P INPUT ACCEPT"; exit 0; }')
         out, calls = _run(tmp, log)
