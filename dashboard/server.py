@@ -186,64 +186,81 @@ def fix_network_access(*ports: int) -> None:
 
 
 def _ensure_network_access(*ports: int) -> None:
-    """Cross-platform, best-effort: open port in the OS firewall for LAN access.
+    """Best effort: open the dashboard ports in the firewall for LAN access.
 
     Runs in a background thread. Only ever reached through fix_network_access,
     i.e. from the user opening REMOTE CONTROL — never at startup.
 
-    Windows : writes a .bat file, runs it elevated via Windows ShellExecuteW
-              (native UAC dialog, guaranteed to appear). One-time setup.
-    macOS   : osascript admin dialog if the Application Firewall is on.
-    Linux   : pkexec GUI → sudo -n → prints manual command as fallback.
+    Tries ufw, then firewalld, then iptables, whichever is active. All ports
+    go in one privileged command, so the user sees at most one password
+    prompt (pkexec), or none when `sudo -n` already works. When neither works
+    it prints the command to run by hand.
     """
+    import shlex
     import subprocess
 
-    # ── Linux ─────────────────────────────────────────────────────────────────
-    def _privileged(cmd: list[str]) -> bool:
+    ports = tuple(dict.fromkeys(int(p) for p in ports if p))
+    if not ports:
+        return
+
+    def _privileged(script: str) -> bool:
         for prefix in (["pkexec"], ["sudo", "-n"]):
             try:
-                r = subprocess.run(prefix + cmd, capture_output=True, timeout=30)
+                r = subprocess.run(prefix + ["sh", "-c", script],
+                                   capture_output=True, timeout=60)
                 if r.returncode == 0:
                     return True
             except Exception:
                 pass
         return False
 
-    try:  # ufw
-        r = subprocess.run(["ufw", "status"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
-        if "active" in r.stdout.lower():
-            if _privileged(["ufw", "allow", f"{port}/tcp"]):
-                print(f"[Dashboard] ufw: port {port} allowed.")
-            else:
-                print(f"[Dashboard] Run manually:  sudo ufw allow {port}/tcp")
-            return
-    except FileNotFoundError:
-        pass
+    def _apply(name: str, commands: list[list[str]]) -> None:
+        script = " && ".join(shlex.join(c) for c in commands)
+        listed = ", ".join(str(p) for p in ports)
+        if _privileged(script):
+            print(f"[Dashboard] {name}: port(s) {listed} allowed.")
+        else:
+            print(f"[Dashboard] Run manually:  sudo sh -c {shlex.quote(script)}")
 
-    try:  # firewalld
-        r = subprocess.run(
-            ["firewall-cmd", "--state"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
-        )
-        if "running" in r.stdout.lower():
-            ok = (_privileged(["firewall-cmd", "--add-port", f"{port}/tcp", "--permanent"])
-                  and _privileged(["firewall-cmd", "--reload"]))
-            if ok:
-                print(f"[Dashboard] firewalld: port {port} allowed.")
-            else:
-                print(f"[Dashboard] Run manually:  sudo firewall-cmd --add-port={port}/tcp --permanent && sudo firewall-cmd --reload")
-            return
-    except FileNotFoundError:
-        pass
+    def _output(cmd: list[str]) -> str | None:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=5)
+            return (r.stdout or "") + (r.stderr or "")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
 
-    try:  # iptables (not persistent but works until reboot)
-        r = subprocess.run(["iptables", "-L", "INPUT", "-n"], capture_output=True, timeout=5)
-        if r.returncode == 0:
-            if _privileged(["iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(port), "-j", "ACCEPT"]):
-                print(f"[Dashboard] iptables: port {port} opened.")
-            else:
-                print(f"[Dashboard] Run manually:  sudo iptables -A INPUT -p tcp --dport {port} -j ACCEPT")
-    except FileNotFoundError:
-        pass  # no iptables means firewall is probably off — nothing to do
+    # ufw: "Status: active". Reading it needs root on some systems; when it
+    # cannot be read, ufw is still tried if it is installed and enabled.
+    ufw = _output(["ufw", "status"])
+    if ufw is not None:
+        enabled = "status: active" in ufw.lower()
+        if not enabled:
+            try:
+                with open("/etc/ufw/ufw.conf", encoding="utf-8") as f:
+                    enabled = "enabled=yes" in f.read().lower()
+            except OSError:
+                pass
+        if enabled:
+            _apply("ufw", [["ufw", "allow", f"{p}/tcp"] for p in ports])
+            return
+
+    state = _output(["firewall-cmd", "--state"])
+    if state is not None and "running" in state.lower() and "not running" not in state.lower():
+        cmds = [["firewall-cmd", "--add-port", f"{p}/tcp", "--permanent"] for p in ports]
+        _apply("firewalld", cmds + [["firewall-cmd", "--reload"]])
+        return
+
+    # iptables needs root even to list, so it is only touched when an active
+    # INPUT policy can be seen; -C keeps reruns from stacking duplicate rules.
+    rules = _output(["iptables", "-S", "INPUT"])
+    if rules and ("-P INPUT DROP" in rules or "-P INPUT REJECT" in rules or "-j DROP" in rules):
+        script_cmds = []
+        for p in ports:
+            rule = ["INPUT", "-p", "tcp", "--dport", str(p), "-j", "ACCEPT"]
+            script_cmds.append(["sh", "-c", f"iptables -C {shlex.join(rule)} 2>/dev/null || iptables -A {shlex.join(rule)}"])
+        _apply("iptables", script_cmds)
+    # Otherwise no active firewall was found, so there is nothing to open.
 
 
 
