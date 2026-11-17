@@ -375,8 +375,13 @@ class HudCanvas(QWidget):
             self._scale += (self._tgt_scale - self._scale) * sp
             self._halo  += (self._tgt_halo  - self._halo)  * sp
 
+        asleep = self._asleep()
         self._blink_tick += 1
-        if self._blink_tick >= 38:
+        if asleep:
+            # The pulsing rules under the state word are the HUD's heartbeat;
+            # asleep they hold still with everything else.
+            self._blink, self._blink_tick, _blinked = False, 0, False
+        elif self._blink_tick >= 38:
             self._blink = not self._blink
             self._blink_tick = 0
             _blinked = True
@@ -394,6 +399,10 @@ class HudCanvas(QWidget):
         self._since_paint += 1
         active = (self.speaking or amp > 0.02
                   or self.state in ("THINKING", "PROCESSING"))
+        if asleep:
+            # The microphone stays open for the wake word, but room noise must
+            # not wake the paint rate up: nothing on screen follows it now.
+            active = False
         if _blinked or self._since_paint >= (2 if active else self._idle_every(now)):
             self._since_paint = 0
             # Nothing is on screen when the window is hidden or minimised, so
@@ -423,9 +432,18 @@ class HudCanvas(QWidget):
             try:
                 if av._blink > 0.0 or av._glance is not None:
                     return 3
+                # Fully asleep the picture does not change at all, so one paint
+                # a second is only a safety net (a theme change, say). Before
+                # this the sleeping face repainted six times a second.
+                if self.state == "SLEEPING" and not self.speaking and av.settled_asleep():
+                    return 60
             except AttributeError:
                 pass
         return 10 if (self.muted or self.state == "SLEEPING") else 5
+
+    def _asleep(self) -> bool:
+        """The assistant is asleep and not saying anything."""
+        return self.state == "SLEEPING" and not self.speaking
 
     def _on_screen(self) -> bool:
         """True only when this canvas can actually be seen by the user."""
@@ -698,9 +716,13 @@ class HudCanvas(QWidget):
         amp = self._amp_disp
         mid = (N - 1) / 2.0
         wx0 = cx - span / 2
+        asleep = self._asleep()
         for i in range(N):
             if self.muted:
                 hgt, c = 1.5, qcol(C.MUTED_C)
+            elif asleep:
+                # Flat and dim: asleep it is not showing what it hears.
+                hgt, c = 1.5, blend(C.PRI, 0.22)
             else:
                 env = (1.0 - abs(i - mid) / mid) ** 0.7      # centre-weighted hump
                 shimmer = 0.55 + 0.45 * math.sin(self._tick * 0.18 + i * 0.7)

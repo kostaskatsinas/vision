@@ -30,7 +30,8 @@ import random
 
 import numpy as np
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF, QRadialGradient
+from PyQt6.QtGui import (QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF,
+                         QRadialGradient)
 
 from core.avatar_mesh import JAW_MAX, JAW_PIVOT, get_head_mesh
 
@@ -70,6 +71,13 @@ _TAU_OPEN = 0.022     # jaw dropping toward a vowel
 _TAU_SHUT = 0.012     # lips closing on a consonant, mid-word
 _TAU_REST = 0.055     # settling back to rest after speech ends
 _TAU_SHAPE = 0.018    # viseme openness following the schedule
+
+# Sleep. The head takes a couple of seconds to drift off and comes back faster,
+# because waking up is the moment the user is waiting on.
+_TAU_SLEEP = 0.9      # awake → asleep
+_TAU_WAKE = 0.25      # asleep → awake
+_SLEEP_BOW = 0.07     # how far the sleeping head tips forward, in radians
+_ASLEEP_STATES = ("SLEEPING", "STANDBY", "OFFLINE")
 
 # Only the microphone path needs a level floor: it has one coarse RMS and no way
 # to tell speech from room tone. VISION's own voice arrives as a per-20 ms
@@ -188,7 +196,13 @@ class HoloAvatar:
         self._gaze_bias = [0.0, 0.0]
         self._bias_tgt = [0.0, 0.0]
         self._bias_at = 0.0
-        self._lids = 1.0           # 1 = wide, 0 = shut; low while asleep
+        self._lids = 1.0           # 1 = wide, 0 = shut; shut while asleep
+        # 0 = awake, 1 = fully asleep. Eased, never switched, so falling asleep
+        # and waking are a second or so of the head settling rather than a cut.
+        # Everything that moves on its own (sway, gaze, the scan line, the
+        # glow) is scaled by (1 - _sleep), which is what makes a sleeping head
+        # actually still instead of a head with its eyes half shut.
+        self._sleep = 0.0
         self._brow_bias = 0.0      # concentration pulls the brows down
         self._glance = None        # (dx, dy, until_t) — a deliberate look
 
@@ -266,6 +280,19 @@ class HoloAvatar:
         amp = max(0.0, min(1.0, float(amp)))
         live = speaking and not muted
 
+        st = (state or "").upper()
+        thinking = st in ("THINKING", "PROCESSING")
+        # Speaking always wins: if something is said while the gate is closed
+        # (a timer going off), the face wakes up to say it.
+        asleep = st in _ASLEEP_STATES and not live
+        self._sleep += ((1.0 if asleep else 0.0) - self._sleep) * _rate(
+            dt, _TAU_SLEEP if asleep else _TAU_WAKE)
+        if asleep and self._sleep > 0.999:
+            self._sleep = 1.0
+        elif not asleep and self._sleep < 0.001:
+            self._sleep = 0.0
+        still = 1.0 - self._sleep
+
         # Idle sway. The phase is *integrated* rather than taken as
         # sin(t * rate * speed): multiplying absolute time by a speed that
         # changes when VISION starts or stops talking jumps the phase by
@@ -274,9 +301,13 @@ class HoloAvatar:
         speed = (1.0 if not muted else 0.55) * (1.25 if live else 1.0)
         self._sway += dt * speed
         s = self._sway
-        self._yaw = 0.26 * math.sin(s * 0.31) + 0.09 * math.sin(s * 0.73 + 1.3)
-        self._pitch = (0.060 * math.sin(s * 0.23 + 0.7)
-                       + 0.024 * math.sin(s * 0.61))
+        # Asleep, the sway fades out and the head rests a little bowed, facing
+        # straight ahead. The phase keeps integrating, so waking eases the sway
+        # back in from wherever it is rather than restarting it.
+        self._yaw = still * (0.26 * math.sin(s * 0.31) + 0.09 * math.sin(s * 0.73 + 1.3))
+        self._pitch = (still * (0.060 * math.sin(s * 0.23 + 0.7)
+                                + 0.024 * math.sin(s * 0.61))
+                       - _SLEEP_BOW * self._sleep)
 
         # Mouth. Which level is driving it matters more than any rate here.
         #
@@ -337,10 +368,6 @@ class HoloAvatar:
         self._brow += (max(-0.4, min(1.2, brow_t)) - self._brow) * 0.20
 
         # ── what the state does to the face ─────────────────────────────────
-        st = (state or "").upper()
-        thinking = st in ("THINKING", "PROCESSING")
-        asleep = st in ("SLEEPING", "STANDBY", "OFFLINE")
-
         if thinking:
             # People look away to think, and hold it. The direction re-rolls
             # slowly so it reads as thought rather than as scanning.
@@ -350,8 +377,8 @@ class HoloAvatar:
                 self._bias_at = t + 1.4 + 1.6 * random.random()
             brow_bias, lid_tgt = -0.28, 0.94
         elif asleep:
-            self._bias_tgt = [0.0, -0.25]
-            brow_bias, lid_tgt = -0.05, 0.22
+            self._bias_tgt = [0.0, 0.0]
+            brow_bias, lid_tgt = -0.05, 0.0
         else:
             # LISTENING / idle / speaking: eyes come back to the user.
             self._bias_tgt = [0.0, 0.0]
@@ -362,12 +389,19 @@ class HoloAvatar:
         for i in (0, 1):
             self._gaze_bias[i] += (self._bias_tgt[i] - self._gaze_bias[i]) * 0.06
         self._lids += (lid_tgt - self._lids) * 0.08
+        if lid_tgt == 0.0 and self._lids < 0.002:
+            self._lids = 0.0
         self._brow_bias += (brow_bias - self._brow_bias) * 0.06
 
         # Gaze: saccades are near-instant jumps between fixations, and they get
         # more frequent when there is something to say. While thinking they slow
         # right down — a darting eye reads as nervous, not thoughtful.
-        if t >= self._gaze_at:
+        if asleep:
+            # Shut eyes do not dart about, and nothing on screen is looked at.
+            self._gaze_tgt = [0.0, 0.0]
+            self._glance = None
+            self._gaze_at = t
+        elif t >= self._gaze_at:
             reach = 0.9 if live else (0.35 if thinking else 0.55)
             self._gaze_tgt = [random.uniform(-1.0, 1.0) * reach,
                               random.uniform(-1.0, 1.0) * reach * 0.55]
@@ -396,12 +430,20 @@ class HoloAvatar:
         wide_t = v_wide if (live and v_open is not None) else 0.0
         self._wide += (max(-1.0, min(1.0, wide_t)) - self._wide) * _rate(dt, 0.030)
 
-        self._glow += ((0.0 if muted else amp) - self._glow) * (
-            0.35 if (0.0 if muted else amp) > self._glow else 0.10)
+        # Asleep, the microphone level no longer lights the head: it is still
+        # listening for the wake word, but a face that glows with every sound
+        # in the room does not look asleep.
+        glow_t = 0.0 if (muted or asleep) else amp
+        self._glow += (glow_t - self._glow) * (0.35 if glow_t > self._glow else 0.10)
+        if self._glow < 0.001:
+            self._glow = 0.0
 
-        self._scan += dt * (0.55 + 1.5 * self._glow)
-        if self._scan > 1.35:
-            self._scan = -1.75
+        # The energy sweep fades out with sleep (see _paint_wire), and stops
+        # travelling once it is invisible.
+        if self._sleep < 1.0:
+            self._scan += dt * (0.55 + 1.5 * self._glow)
+            if self._scan > 1.35:
+                self._scan = -1.75
 
         if self._blink > 0.0:
             self._blink = max(0.0, self._blink - dt * 8.5)
@@ -421,9 +463,25 @@ class HoloAvatar:
         Used when something appears on screen: a face that looks at what just
         showed up tells the user it landed, without a word being spoken.
         """
+        if self._sleep > 0.5:
+            return            # asleep: something appearing does not wake the eyes
         self._glance = (max(-1.0, min(1.0, float(dx))),
                         max(-1.0, min(1.0, float(dy))),
                         self._t + max(0.1, float(hold)))
+
+    @property
+    def sleep_level(self) -> float:
+        """0 awake .. 1 fully asleep."""
+        return self._sleep
+
+    def settled_asleep(self) -> bool:
+        """True once the head is fully asleep and nothing on it is moving, so
+        a repaint would draw exactly the same picture. The HUD uses this to
+        stop repainting a sleeping face several times a second."""
+        return (self._sleep >= 1.0 and self._lids == 0.0 and self._blink == 0.0
+                and self._mouth == 0.0 and self._glow == 0.0
+                and abs(self._gaze[0]) < 0.002 and abs(self._gaze[1]) < 0.002
+                and self._emph < 0.002)
 
     # ── posing ──────────────────────────────────────────────────────────────
 
@@ -585,10 +643,12 @@ class HoloAvatar:
             # structure lines over skin.
             front = nz > -0.05
             va = np.where(front, 0.10 + 0.42 * fres, 0.0)
-            va += 0.30 * np.exp(-((verts[:, 1] - self._scan) / 0.13) ** 2) * front
+            va += (0.30 * (1.0 - self._sleep)
+                   * np.exp(-((verts[:, 1] - self._scan) / 0.13) ** 2) * front)
         else:
             va = np.where(nz < 0.0, 0.13 + 0.26 * fres, 0.28 + 0.72 * fres)
-            va += 0.42 * np.exp(-((verts[:, 1] - self._scan) / 0.13) ** 2)
+            va += (0.42 * (1.0 - self._sleep)
+                   * np.exp(-((verts[:, 1] - self._scan) / 0.13) ** 2))
         va *= self._fade * (0.80 + 0.45 * amp)
 
         ea = 0.5 * (va[self._e0] + va[self._e1])
@@ -645,7 +705,10 @@ class HoloAvatar:
             return
 
         lm = self._lm
-        vis = 1.0 - self._blink
+        # How open the eyes are: a blink, or the lids lowered by the state
+        # (shut while asleep). The lids used to be computed and never drawn,
+        # which is why a sleeping face kept its eyes open.
+        vis = min(1.0 - self._blink, self._lids)
 
         # ── eyes ────────────────────────────────────────────────────────────
         for key in ("eye_l", "eye_r"):
@@ -662,6 +725,21 @@ class HoloAvatar:
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.setPen(QPen(_c(primary, 210 * face), 1.3))      # lid line
             p.drawPolygon(poly)
+
+            if vis < 0.30:
+                # Shut eyes: a squashed eye on its own reads as a slit, which
+                # is a squint. The lid drawn as a soft downward curve between
+                # the corners, a little heavier, is what reads as asleep.
+                k = 1.0 - vis / 0.30
+                i0, i1 = int(np.argmin(ex)), int(np.argmax(ex))
+                x0, y0 = float(ex[i0]), float(ey[i0])
+                x1, y1 = float(ex[i1]), float(ey[i1])
+                sag = (x1 - x0) * 0.16
+                lid = QPainterPath(QPointF(x0, y0))
+                lid.quadTo(QPointF((x0 + x1) / 2, (y0 + y1) / 2 + sag), QPointF(x1, y1))
+                p.setPen(QPen(_c(accent, 235 * face * k), 2.0, Qt.PenStyle.SolidLine,
+                              Qt.PenCapStyle.RoundCap))
+                p.drawPath(lid)
 
             if vis > 0.35:
                 br = poly.boundingRect()
