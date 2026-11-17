@@ -92,6 +92,7 @@ from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
 from core                      import aec as system_aec
+from core                      import live_keepalive
 from core.viseme               import VisemeStream
 from core.wake_word            import (
     WakeWordDetector, WAKE_PHRASE, is_ready as wake_is_ready,
@@ -2124,8 +2125,24 @@ class VisionLive:
         )
 
     async def _send_realtime(self):
+        # Gemini Live closes a session that has not heard from the client for a
+        # while (1008 "client inactivity"), and Vision is silent on purpose a
+        # lot: asleep, muted, push-to-talk up, while it talks or runs a tool.
+        # So when nothing has gone out for a few seconds, send a tenth of a
+        # second of digital silence. It is not the microphone (sleep stays
+        # private) and voice detection hears no speech in it. A local engine
+        # has no such limit and gets nothing extra. See core/live_keepalive.py.
+        last_sent = time.monotonic()
         while True:
-            msg = await self.out_queue.get()
+            if self._engine is not None:
+                msg = await self.out_queue.get()
+            else:
+                wait = live_keepalive.KEEPALIVE_AFTER - (time.monotonic() - last_sent)
+                msg = await live_keepalive.next_or_none(self.out_queue, wait)
+                if msg is None:
+                    msg = {"data": live_keepalive.silence(SEND_SAMPLE_RATE),
+                           "mime_type": "audio/pcm"}
+            last_sent = time.monotonic()
             # Gemini 3.x Live rejects the old realtime_input.media_chunks field
             # (what `media=...` maps to) and closes the socket with a 1007. Send
             # mic / phone PCM through the new `audio` field instead. Queue items
@@ -2485,8 +2502,15 @@ class VisionLive:
                     if response.tool_call:
                         await self._answer_tool_call(response.tool_call)
         except Exception as e:
-            print(f"[VISION] ❌ Recv: {e}")
-            traceback.print_exc()
+            if live_keepalive.is_inactivity_close(e):
+                # Not a crash: the server timed the session out. The run loop
+                # reconnects at once and keeps the conversation; the full
+                # traceback here only buried that one fact under two pages.
+                print("[VISION] Live session closed by the server for "
+                      "inactivity — reconnecting.")
+            else:
+                print(f"[VISION] ❌ Recv: {e}")
+                traceback.print_exc()
             raise
 
     async def _play_audio(self):
@@ -3287,6 +3311,15 @@ class VisionLive:
                 # A deliberate clean slate (voice change) — drop the
                 # handle so the next connect really does start empty.
                 self._resume_handle = None
+            self._conn_backoff = 0
+            return True
+
+        # The server timed the session out for client inactivity (1008).
+        # Nothing is broken: reconnect at once, keeping the resumption handle
+        # so the conversation carries on, and skip the traceback. If the
+        # handle turns out to be stale, the branch below drops it next time.
+        if live_keepalive.is_inactivity_close(e):
+            print("[VISION] Reconnecting after the inactivity timeout.")
             self._conn_backoff = 0
             return True
 
