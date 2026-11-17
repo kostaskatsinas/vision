@@ -373,8 +373,12 @@ def _x11_act_on_app(app_name: str, what: str) -> dict:
     ids: list[str] = []
     if shutil.which("xdotool"):
         for pid in sorted(pids):
-            r = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid)],
-                               capture_output=True, text=True, timeout=5)
+            # A minimized (iconified) window is not "visible", and restore
+            # exists exactly to reach those.
+            search = ["xdotool", "search", "--pid", str(pid)]
+            if what != "restore":
+                search[2:2] = ["--onlyvisible"]
+            r = subprocess.run(search, capture_output=True, text=True, timeout=5)
             ids += [i for i in r.stdout.split() if i not in ids]
     if not ids:
         raise WindowError(f"'{app_name}' is running but no window of it was found "
