@@ -1,0 +1,8 @@
+{
+  "uuid": "vision-windows@vision",
+  "name": "Vision window helper",
+  "description": "Lets the Vision assistant list windows and minimize, maximize, restore or raise one window by its id, so a spoken command reaches the app that was named and not whichever window has focus.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "version": 1,
+  "url": "https://github.com/kostaskatsinas/vision"
+}

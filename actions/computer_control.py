@@ -456,6 +456,16 @@ def _focus_app_if_named(app_name: str) -> tuple[str | None, str]:
     app_name = (app_name or "").strip()
     if not app_name:
         return None, ""
+    # On GNOME Wayland, xdotool and wmctrl below cannot raise a native Wayland
+    # window at all; Vision's GNOME window helper can, by the app's name.
+    try:
+        from core import window_control
+        raised = window_control.activate_app(app_name)
+    except Exception:
+        raised = None
+    if raised:
+        time.sleep(0.2)
+        return raised, ""
     candidates = appidentity.running(app_name)      # never the assistant
     if not candidates:
         return None, (f"no running application matches '{app_name}' - open it "

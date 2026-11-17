@@ -40,4 +40,8 @@ if [[ "$want" != "$have" ]]; then
     echo "$want" > "$STAMP"
 fi
 
+# GNOME window helper: lets Vision minimize or maximize the app you NAME
+# instead of whichever window has focus. Copies only when it changed.
+python -m core.window_control --install || true
+
 exec python main.py "$@"
