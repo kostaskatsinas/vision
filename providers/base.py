@@ -208,6 +208,11 @@ class Msg:
         return Msg(server_content=ServerContent(turn_complete=True))
 
     @staticmethod
+    def interrupted() -> "Msg":
+        """The reply in progress was stopped and will never get a turn_end."""
+        return Msg(server_content=ServerContent(interrupted=True))
+
+    @staticmethod
     def calls(items: Sequence[FunctionCall]) -> "Msg":
         return Msg(tool_call=ToolCall(list(items)))
 

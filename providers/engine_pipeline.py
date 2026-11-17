@@ -412,6 +412,12 @@ class PipelineEngine:
         """
         if self._gen and not self._gen.done():
             self._gen.cancel()
+            # A cancelled generation never emits its turn_end, and main.py drops
+            # every reply after an interruption until it sees one, so without
+            # this marker the NEXT answer would be thrown away too. Queued after
+            # whatever audio was already emitted, so that is still dropped.
+            if not self._closed:
+                self._queue.put_nowait(Msg.interrupted())
 
     # ── generation ───────────────────────────────────────────────────────────
     def _queue_generation(self) -> None:

@@ -206,6 +206,15 @@ def save_push_to_talk_enabled(enabled: bool) -> None:
     _save_flag("push_to_talk_enabled", enabled)
 
 
+def get_barge_in_enabled() -> bool:
+    """Talk over Vision to stop it. On unless turned off in CONTROLS."""
+    return bool(load_api_keys().get("barge_in_enabled", True))
+
+
+def save_barge_in_enabled(enabled: bool) -> None:
+    _save_flag("barge_in_enabled", bool(enabled))
+
+
 HUD_STYLES = ("face", "core")
 
 

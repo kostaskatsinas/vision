@@ -10,10 +10,11 @@ during that gap is how an assistant hears its own last sentence and answers
 itself. This module lets the tail drop our own voice while still passing a user
 who replies instantly, instead of blanket-muting.
 
-Interrupting mid-sentence by voice is the other thing it can do, and everything
-needed for it is here and tested — but it depends on the listener's room, so it
-stays switched off until it can be tried on real hardware. See the note in
-`_listen_audio` for how little it takes to turn back on.
+It also decides when the user is talking over a reply (barge-in, see
+`_barge_in_check` in main.py). That works when our echo is quiet: headphones,
+or the desktop's echo canceller in front of the mic (core/aec.py). On open
+speakers without one, measured on synthetic voices, it never mistakes our echo
+for a person but also cannot pick a person out of it.
 
 The problem with a level test
 -----------------------------
@@ -88,6 +89,17 @@ _BLOCKS_NORMAL = 5    # ~320 ms of sustained evidence
 _BLOCKS_NOISY = 12    # ~770 ms when the room is this hard
 
 _FLOOR_WINDOW = 60    # blocks kept to characterise the room's echo
+
+# The second test: plain loudness, but against THIS room's echo rather than a
+# fixed number. Echo that has been through an echo canceller (or headphones)
+# is quiet, and there content barely matters: someone talking over it is far
+# louder than anything we hear of ourselves. On open speakers the bar sits well
+# above our own loudest syllables, so it only fires for a voice that clearly
+# dominates, and the content test above has to do the rest.
+_LOUD_MIN = 0.12      # never call anything quieter than this loud
+_LOUD_Q = 97          # percentile of observed echo LEVEL the bar must clear
+_LOUD_MULT = 1.6      # ...with this much headroom above it
+_QUIET_ECHO = 0.2     # echo this quiet at its loudest: loudness is trustworthy
 _FLOOR_Q = 35         # percentile taken as "typical echo here"
 _WARMUP = 16          # blocks (~1 s) of listening before judging anyone
 _RELEARN_RUN = 28     # a 'voice' lasting this long means the room changed
@@ -99,7 +111,10 @@ def band_energies(pcm, sr: int) -> np.ndarray:
     Left unnormalised on purpose: the decision below projects one of these onto
     another, and a projection needs real magnitudes.
     """
-    x = np.asarray(pcm, dtype=np.float32)
+    # Flattened: the microphone callback hands over (frames, channels). Left
+    # 2-D, the window below broadcast it into a frames x frames matrix, so the
+    # "fingerprint" was noise and every block cost a million-point FFT.
+    x = np.asarray(pcm, dtype=np.float32).reshape(-1)
     if x.size < 64:
         return np.zeros(len(_BAND_EDGES) - 1, dtype=np.float32)
     x = x - x.mean()
@@ -131,6 +146,9 @@ class EchoGuard:
         self._floor = 0.10        # typical echo residual here; learned
         self._run = 0             # consecutive blocks called speech
         self._head = 0.13         # near-worst echo residual here; learned
+        self._levels: list[float] = []      # recent ECHO levels only
+        self._lvl_head = 0.5      # near-loudest echo level here; learned
+        self._last_loud = False   # the last voice block passed on loudness
 
     # ── diagnostics, for the log and for tests ──────────────────────────────
 
@@ -156,7 +174,9 @@ class EchoGuard:
         subtraction almost as well as a quiet voice does. Rather than guess, the
         guard says so and starts demanding corroborating evidence.
         """
-        return self._floor < _UNRELIABLE_FLOOR
+        # A quiet echo (headphones, an echo canceller in front of the mic)
+        # leaves loudness to decide, and loudness does not need the extra time.
+        return self._floor < _UNRELIABLE_FLOOR or self._lvl_head < _QUIET_ECHO
 
     @property
     def threshold(self) -> float:
@@ -164,9 +184,27 @@ class EchoGuard:
         return max(_MIN_USER, self._head * _HEAD_MULT)
 
     @property
+    def loud_bar(self) -> float:
+        """The mic level a block must reach right now to count as a voice on
+        loudness alone."""
+        return max(_LOUD_MIN, self._lvl_head * _LOUD_MULT)
+
+    def _learn_level(self, level: float) -> None:
+        self._levels.append(float(level))
+        if len(self._levels) > _FLOOR_WINDOW:
+            del self._levels[:-_FLOOR_WINDOW]
+        if len(self._levels) >= _WARMUP:
+            self._lvl_head = float(np.percentile(self._levels, _LOUD_Q))
+
+    @property
     def required_blocks(self) -> int:
-        """Consecutive positive blocks before an interruption is believed."""
-        return _BLOCKS_NORMAL if self.reliable else _BLOCKS_NOISY
+        """Consecutive positive blocks before an interruption is believed.
+
+        Loudness well above our own loudest echo is strong evidence on its own,
+        so it does not need the longer wait a poor room asks of content."""
+        if self.reliable or self._last_loud:
+            return _BLOCKS_NORMAL
+        return _BLOCKS_NOISY
 
     @property
     def last_similarity(self) -> float:
@@ -203,6 +241,7 @@ class EchoGuard:
                 # the calibration sample.
                 if self._hist and max(h[2] for h in self._hist) > 0.15:
                     self._residuals.append(0.0)
+                    self._learn_level(level)
                     if len(self._residuals) > _FLOOR_WINDOW:
                         del self._residuals[:-_FLOOR_WINDOW]
                     if len(self._residuals) >= _WARMUP:
@@ -254,7 +293,9 @@ class EchoGuard:
             # thing it is watching for.
             warming = len(self._residuals) < _WARMUP
             thr = self.threshold
-            speech = (not warming) and best_res >= thr
+            loud = level >= self.loud_bar
+            speech = (not warming) and (best_res >= thr or loud)
+            self._last_loud = speech and loud
 
             if speech:
                 self._run += 1
@@ -263,12 +304,14 @@ class EchoGuard:
                 # us (volume, headphones unplugged), so characterise it again.
                 if self._run > _RELEARN_RUN:
                     self._residuals.clear()
+                    self._levels.clear()
                     self._run = 0
                     return False
                 return True
 
             self._run = 0
             self._residuals.append(best_res)
+            self._learn_level(level)
             if len(self._residuals) > _FLOOR_WINDOW:
                 del self._residuals[:-_FLOOR_WINDOW]
             if len(self._residuals) >= _WARMUP:
