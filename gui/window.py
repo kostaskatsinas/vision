@@ -1628,6 +1628,10 @@ class MainWindow(QMainWindow):
         self._ptt_btn.clicked.connect(self._toggle_ptt)
         self._refresh_talk_btns()
 
+        self._barge_btn = _row(QPushButton())
+        self._barge_btn.clicked.connect(self._toggle_barge_in)
+        self._refresh_barge_btn()
+
         self._hud_btn = _row(QPushButton())
         self._hud_btn.clicked.connect(self._toggle_hud_style)
         self._refresh_hud_btn()
@@ -2401,6 +2405,28 @@ class MainWindow(QMainWindow):
         self._log.append_log(
             f"SYS: Auto-sleep after {self._idle_sleep_label(want).lower()} of quiet."
             if want else "SYS: Auto-sleep off: Vision keeps listening until told to sleep.")
+
+    def _refresh_barge_btn(self):
+        if not hasattr(self, "_barge_btn"):
+            return
+        from memory.config_manager import get_barge_in_enabled
+        on = get_barge_in_enabled()
+        self._barge_btn.setText(f"✋  INTERRUPT BY VOICE: {'ON' if on else 'OFF'}")
+        self._barge_btn.setStyleSheet(btn_css("on" if on else "off"))
+        self._barge_btn.setToolTip(
+            "When on, start talking while Vision speaks and it stops and listens. "
+            "Turn it off if Vision keeps cutting itself off on loud speakers. "
+            "With push-to-talk, holding the key interrupts instead.")
+
+    def _toggle_barge_in(self):
+        """Read by the assistant at the start of each reply: no restart needed."""
+        from memory.config_manager import get_barge_in_enabled, save_barge_in_enabled
+        want = not get_barge_in_enabled()
+        save_barge_in_enabled(want)
+        self._refresh_barge_btn()
+        self._log.append_log(
+            "SYS: Interrupt by voice on: talk over Vision to stop it." if want
+            else "SYS: Interrupt by voice off: Vision finishes what it is saying.")
 
     def _refresh_talk_btns(self):
         """Repaint the push-to-talk row from the saved setting."""

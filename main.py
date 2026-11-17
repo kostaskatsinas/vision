@@ -43,6 +43,7 @@ import re
 import threading
 import time
 import json
+from collections import deque
 import sys
 import traceback
 from contextlib import asynccontextmanager
@@ -79,7 +80,7 @@ from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
     get_push_to_talk_enabled, get_thinking_enabled, get_turn_tuning, get_voice,
     get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
-    get_idle_sleep_minutes,
+    get_idle_sleep_minutes, get_barge_in_enabled,
 )
 from core                     import gemini as _gemini
 from core.plugin_loader        import discover_plugins
@@ -90,6 +91,7 @@ from core                      import identity
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
+from core                      import aec as system_aec
 from core.viseme               import VisemeStream
 from core.wake_word            import (
     WakeWordDetector, WAKE_PHRASE, is_ready as wake_is_ready,
@@ -162,6 +164,11 @@ def _pcm_level(samples) -> float:
 # Extra time beyond the device's reported output latency before the microphone
 # is trusted again: covers room decay and the speaker's own settling.
 _TAIL_MARGIN = 0.25
+
+# Barge-in: microphone blocks kept while VISION talks, so the first words of
+# whoever interrupted reach the model instead of being lost to the time it took
+# to be sure. 8 blocks of 64 ms is about half a second.
+_BARGE_PREROLL_BLOCKS = 8
 
 # How long a sent turn may go unanswered before the session is presumed dead.
 #
@@ -652,6 +659,21 @@ class VisionLive:
         self._ptt                  = None    # core.hotkey.PushToTalk
         self._out_level            = 0.0     # level of the audio being played right now
         self._echo                 = EchoGuard()
+        # Barge-in: talking over VISION stops it. See _barge_in_check.
+        self._barge_in_on          = True    # re-read from config at each reply
+        self._barge_run            = 0       # consecutive blocks that were a voice
+        self._barge_pending        = False   # an interrupt is on its way to the loop
+        self._barge_preroll        = deque(maxlen=_BARGE_PREROLL_BLOCKS)
+        # True while the server is still sending the current reply (audio has
+        # arrived and its turn_complete has not). Only then does an interrupt
+        # have anything left to throw away.
+        self._reply_open           = False
+        # The desktop's echo canceller in front of the mic (core/aec.py), so
+        # talking over VISION also works on open speakers.
+        self._aec                  = system_aec.SystemAEC()
+        import atexit as _atexit
+        _atexit.register(self._aec.stop)    # also on exits that skip finish()
+        self._aec_said             = ""
         # `stream.write()` returns when the buffer accepts the audio, not when the
         # speaker has finished with it, so sound is still in the room after the
         # speaking flag drops. Streaming the microphone during that gap is how an
@@ -1082,6 +1104,10 @@ class VisionLive:
             except Exception as e:
                 print(f"[VISION] wrap-up cut short: {e!r}")
         self._stop_engines()
+        try:
+            self._aec.stop()
+        except Exception:
+            pass
 
     # ── Routines (core/routines) ─────────────────────────────────────────────────
     # The engine runs on its own thread and asks through these: can something be
@@ -1371,7 +1397,19 @@ class VisionLive:
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
+            was = self._is_speaking
             self._is_speaking = value
+        if value and not was:
+            # A new reply starts: forget the last one's barge-in evidence and
+            # pick up the CONTROLS setting, so a change applies without restart.
+            self._barge_run = 0
+            self._barge_preroll.clear()
+            try:
+                self._barge_in_on = get_barge_in_enabled()
+            except Exception:
+                pass
+            if self._barge_in_on and self._aec.due():
+                self._start_aec()
         if value:
             self._tail_until = 0.0
         else:
@@ -1422,6 +1460,15 @@ class VisionLive:
         self._ptt_held = held
         if held:
             self._note_user_activity()
+            # Holding the key to speak while VISION is talking is the clearest
+            # interruption there is: stop and listen.
+            with self._speaking_lock:
+                speaking = self._is_speaking
+            if speaking and self._loop is not None:
+                try:
+                    self._loop.call_soon_threadsafe(self.interrupt)
+                except Exception:
+                    pass
             # Holding the key is also a way to wake it, so push-to-talk works
             # without having to say the wake word first.
             if self._wake_enabled and not self._awake:
@@ -1460,7 +1507,25 @@ class VisionLive:
 
     def interrupt(self) -> None:
         """Stop VISION mid-speech: drain queued audio and open mic immediately."""
-        self._interrupted = True
+        # Drop what is still to come of this reply — but only if something IS
+        # still to come. When the server has already finished sending it (the
+        # usual case: replies arrive faster than they are spoken) there is
+        # nothing to drop, and setting the flag would throw away the answer to
+        # whatever the user says next instead.
+        self._interrupted = bool(self._reply_open)
+        self._stop_playback()
+        # Draining the queue stops the speakers, but a local engine is still
+        # generating the rest of the answer and would keep filling it back up.
+        # Live has nothing to cancel here — the server stops on its own.
+        if self._engine is not None:
+            try:
+                self._engine.interrupt()
+            except Exception:
+                pass
+        self.ui.write_log("SYS: Interrupted — listening...")
+
+    def _stop_playback(self) -> None:
+        """Silence the speakers now: drop queued audio and the mouth with it."""
         q = self.audio_in_queue
         if q:
             drained = 0
@@ -1478,15 +1543,83 @@ class VisionLive:
         self._play_cursor = 0.0     # next batch starts a fresh timeline
         if self._turn_done_event:
             self._turn_done_event.clear()
-        # Draining the queue stops the speakers, but a local engine is still
-        # generating the rest of the answer and would keep filling it back up.
-        # Live has nothing to cancel here — the server stops on its own.
-        if self._engine is not None:
-            try:
-                self._engine.interrupt()
-            except Exception:
-                pass
-        self.ui.write_log("SYS: Interrupted — listening...")
+
+    # ── Barge-in ─────────────────────────────────────────────────────────────
+    def _start_aec(self, delay: float = 0.0) -> None:
+        """Route our audio through the echo canceller, off every hot thread."""
+        def _work():
+            if delay:
+                time.sleep(delay)
+            status = self._aec.ensure()
+            print(f"[VISION] Echo cancel: {status} {self._aec.detail}".rstrip())
+            if status != self._aec_said and status in ("on", "no-pactl",
+                                                       "no-streams", "failed"):
+                self._aec_said = status
+                try:
+                    self.ui.write_log(system_aec.describe(status, self._aec.detail))
+                except Exception:
+                    pass
+        threading.Thread(target=_work, name="vision-aec", daemon=True).start()
+
+    def _barge_in_check(self, indata, loop) -> None:
+        """A microphone block while VISION talks. Stop talking if it is a voice.
+
+        Runs on the audio thread. The hard part is echo: on speakers the mic
+        hears VISION itself, so the question is not "is the mic loud" but "is
+        it something other than what we are playing". `EchoGuard` answers that
+        per block, learning the room as it goes; it takes `required_blocks` in
+        a row (about a third of a second, longer in a noisy room) so a cough,
+        a keystroke or a loud syllable of our own cannot stop a reply.
+        """
+        if (not self._barge_in_on or self.ui.muted or self._phone_active
+                or self._ptt_enabled):
+            # Push-to-talk interrupts with the key instead (see _on_ptt).
+            return
+        self._barge_preroll.append(indata.copy())
+        if self._barge_pending:
+            return
+        try:
+            # Before the first slice of this reply is recorded the guard knows
+            # nothing is playing and calls everything a voice. Do not believe
+            # it for that moment.
+            heard = bool(self._echo._hist) and self._echo.is_user_speech(
+                indata, SEND_SAMPLE_RATE, _pcm_level(indata))
+        except Exception:
+            heard = False
+        self._barge_run = self._barge_run + 1 if heard else 0
+        if self._barge_run >= self._echo.required_blocks:
+            self._barge_run = 0
+            self._barge_pending = True
+            loop.call_soon_threadsafe(self._barge_in)
+
+    def _barge_in(self) -> None:
+        """On the loop: the user talked over VISION. Stop, and pass on what
+        they have said so far so the start of the sentence is not lost."""
+        try:
+            with self._speaking_lock:
+                speaking = self._is_speaking
+            blocks = list(self._barge_preroll)
+            self._barge_preroll.clear()
+            if not speaking:
+                return          # the reply ended on its own meanwhile
+            print(f"[VISION] ✋ Barge-in (echo floor {self._echo.floor:.2f}, "
+                  f"bar {self._echo.threshold:.2f}, "
+                  f"{self._echo.required_blocks} blocks)")
+            self._note_user_activity()
+            self.interrupt()
+            # The user is mid-sentence: the echo tail would drop some of their
+            # words as ours, so end it now.
+            self._tail_until = 0.0
+            for b in blocks:
+                if identity.listen(b):
+                    continue
+                try:
+                    self.out_queue.put_nowait(
+                        {"data": b.tobytes(), "mime_type": "audio/pcm"})
+                except Exception:
+                    break
+        finally:
+            self._barge_pending = False
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -2028,14 +2161,9 @@ class VisionLive:
             # the echo of what we are playing right now", sustained long enough
             # that a cough or a keystroke cannot trigger it.
             if vision_speaking:
-                # Nothing is streamed while VISION talks.
-                #
-                # Interrupting by voice used to live here: `EchoGuard` can pick a
-                # user out from under our own echo, and `core/echo.py` still does
-                # that for the tail below. Re-enabling is small — classify each
-                # block here and call interrupt() after `required_blocks` of
-                # agreement — but it depends on the listener's room, so it stays
-                # out until it can be tried on real hardware.
+                # Nothing is streamed while VISION talks; the block is only
+                # checked for someone talking over it.
+                self._barge_in_check(indata, loop)
                 return
 
             # ── Echo tail ────────────────────────────────────────────────────
@@ -2117,6 +2245,13 @@ class VisionLive:
 
             with _mic_stream:
                 print("[VISION] 🎤 Mic stream open")
+                # Once the speaker is open too, put both behind the desktop's
+                # echo canceller so talking over VISION works on speakers.
+                try:
+                    if get_barge_in_enabled():
+                        self._start_aec(delay=2.0)
+                except Exception:
+                    pass
                 while True:
                     await asyncio.sleep(0.1)
         except Exception as e:
@@ -2187,6 +2322,7 @@ class VisionLive:
             if self._interrupted:
                 pass  # discard: interrupted
             else:
+                self._reply_open = True
                 if self._turn_done_event and self._turn_done_event.is_set():
                     self._turn_done_event.clear()
                 # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
@@ -2221,12 +2357,33 @@ class VisionLive:
                 in_buf.append(txt)
                 self._last_user_speech = time.monotonic()
 
+    def _on_server_interrupted(self, out_buf: list) -> None:
+        """The server (or the local engine) stopped the reply in progress.
+
+        Gemini sends this when it hears the user over its answer, and the local
+        engine when interrupt() cancelled it. Nothing more of that reply will
+        come, and it may never get a turn_complete, so this is where dropping
+        it ends; otherwise the answer to what the user just said is dropped too.
+        """
+        if not self._interrupted:
+            # Gemini heard the user before we did: stop the speakers as well.
+            with self._speaking_lock:
+                speaking = self._is_speaking
+            if speaking:
+                self._stop_playback()
+                self.ui.write_log("SYS: Interrupted — listening...")
+        self._interrupted = False
+        self._reply_open = False
+        out_buf.clear()
+        self._visemes.reset()
+
     def _finish_turn(self, in_buf: list, out_buf: list) -> bool:
         """Log the finished turn and empty its buffers. True when the turn was an
         interrupted reply, which is dropped: the caller then skips the rest of
         this message."""
         if self._turn_done_event:
             self._turn_done_event.set()
+        self._reply_open = False
 
         # If this turn_complete ends an interrupted response, clear the
         # flag and skip all further processing for that turn.
@@ -2310,6 +2467,9 @@ class VisionLive:
                     if response.server_content:
                         sc = response.server_content
                         self._collect_transcripts(sc, in_buf, out_buf)
+
+                        if getattr(sc, "interrupted", False):
+                            self._on_server_interrupted(out_buf)
 
                         # A dropped (interrupted) turn skips the rest of this message.
                         if sc.turn_complete and self._finish_turn(in_buf, out_buf):
@@ -3002,6 +3162,7 @@ class VisionLive:
         self._vision_busy          = False
         self._vision_last_time     = 0.0
         self._interrupted          = False
+        self._reply_open           = False
 
         print("[VISION] Connected.")
         if resumed_with:
