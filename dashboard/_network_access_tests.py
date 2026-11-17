@@ -68,13 +68,36 @@ def main() -> int:
         os.remove(os.path.join(tmp, "ufw"))
         _tool(tmp, "iptables",
               f'[ "$1" = -S ] && {{ echo "-P INPUT DROP"; exit 0; }}; '
-              f'[ "$1" = -C ] && exit 1; echo "iptables $*" >> {log}')
+              f'[ "$1" = -D ] && exit 1; echo "iptables $*" >> {log}')
         out, calls = _run(tmp, log)
         check("iptables: both ports accepted in one prompt",
               calls.count("PKEXEC") == 1
-              and "iptables -A INPUT -p tcp --dport 8765 -j ACCEPT" in calls
-              and "iptables -A INPUT -p tcp --dport 8766 -j ACCEPT" in calls,
+              and "iptables -I INPUT 1 -p tcp --dport 8765 -j ACCEPT" in calls
+              and "iptables -I INPUT 1 -p tcp --dport 8766 -j ACCEPT" in calls,
               calls)
+
+        _tool(tmp, "iptables",
+              f'[ "$1" = -S ] && {{ printf "%s\\n" "-P INPUT ACCEPT" "-A INPUT -j lan" '
+              f'"-A lan -p tcp --dport 8765 -j DROP"; exit 0; }}; '
+              f'[ "$1" = -D ] && exit 1; echo "iptables $*" >> {log}')
+        out, calls = _run(tmp, log)
+        check("iptables: a drop in a custom chain is found and the rule goes first",
+              "iptables -I INPUT 1 -p tcp --dport 8765 -j ACCEPT" in calls, out + calls)
+
+        # An ACCEPT already exists below the jump: it is removed and re-added on top.
+        state = os.path.join(tmp, "has_rule")
+        open(state, "w").close()
+        _tool(tmp, "iptables",
+              f'[ "$1" = -S ] && {{ printf "%s\\n" "-A INPUT -j lan" "-A INPUT -p tcp --dport 8765 -j ACCEPT" '
+              f'"-A lan -j DROP"; exit 0; }}; '
+              f'if [ "$1" = -D ]; then [ -e {state} ] && {{ rm {state}; echo "iptables $*" >> {log}; exit 0; }}; exit 1; fi; '
+              f'echo "iptables $*" >> {log}')
+        out, calls = _run(tmp, log)
+        lines = calls.splitlines()
+        d = "iptables -D INPUT -p tcp --dport 8765 -j ACCEPT"
+        i = "iptables -I INPUT 1 -p tcp --dport 8765 -j ACCEPT"
+        check("iptables: an existing ACCEPT below a jump is moved to the top",
+              d in lines and i in lines and lines.index(d) < lines.index(i), calls)
 
         _tool(tmp, "iptables", '[ "$1" = -S ] && { echo "-P INPUT ACCEPT"; exit 0; }')
         out, calls = _run(tmp, log)
