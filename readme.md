@@ -95,7 +95,8 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 |---|---|
 | Web search | Five modes: search, news, research, price and compare. Gemini's grounded search first, DuckDuckGo as fallback. Results also appear in the panel under the head. |
 | Browser control | Open a page, search, click, type, fill forms, read the page, manage tabs. It opens the browser itself. |
-| Weather | "What's the weather?" for your city, or any city you name. |
+| Weather | Spoken, no browser: "What's the weather?", "Will it rain on Friday?", "Forecast for the next 5 days in Thessaloniki". Now, any day up to 16 days ahead, or several days in a row, from Open-Meteo (free, no key). With no city named it uses `weather_city` in `config/api_keys.json`, else the city Vision remembers ("my city is Patras"), else Athens. |
+| Greek news | "What's the news?", "Greek news about the economy". Reads a short summary of the latest headlines from ERT, in.gr and Naftemporiki, or Google News Greece for a topic, in Greek or English. No browser. Replace the feeds with a `news_feeds` list in `config/api_keys.json`. |
 | Flights | Searches Google Flights and reads out the best options. |
 | News watch | "Keep an eye on news about X". Checks once a day and tells you when something new appears. |
 | System status | CPU, memory, GPU and temperature, with a spoken alert when something runs hot. |
@@ -233,7 +234,8 @@ vision/
 │   ├── desktop.py               # Wallpaper and Desktop tidy
 │   ├── video_player.py          # Video and pictures on the HUD
 │   ├── send_message.py          # WhatsApp, Telegram and others
-│   ├── weather_report.py        # Weather
+│   ├── weather_report.py        # Weather, spoken (Open-Meteo)
+│   ├── greek_news.py            # Greek news headlines, spoken
 │   ├── flight_finder.py         # Google Flights
 │   ├── game_updater.py          # Steam and Epic
 │   └── screen_processor.py, system_monitor.py, background_monitor.py,
@@ -275,6 +277,7 @@ python -m core._wayland_tests             # Wayland screen, mouse, keyboard, win
 python -m actions._google_calendar_tests  # Google Calendar
 python -m actions._cli_helper_tests       # Claude Code and Gemini CLI helpers
 python -m actions._features_tests         # Timers, scenes, Spotify, chat reply
+python -m actions._weather_news_tests     # Spoken weather and Greek news
 python -m actions._terminal_tests         # Built-in terminals
 python -m core._sleep_tests               # Going to sleep by voice
 python -m core._window_control_tests      # Minimise / maximise the named app only
