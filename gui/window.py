@@ -353,8 +353,12 @@ class MainWindow(QMainWindow):
         # voice tool reads it from another thread.
         self._term_shown = False
         self._term_count = 0
+        self._term_running = 0
         self._term_dock = TerminalDock()
         self._term_dock.count_changed.connect(self._on_term_count)
+        self._term_dock.running_changed.connect(self._on_term_running)
+        self._term_dock.start_failed.connect(
+            lambda why: self._log.append_log(f"SYS: The terminal could not start. {why}"))
         self._term_dock.hide_requested.connect(self._hide_terminals)
         QApplication.instance().aboutToQuit.connect(self._term_dock.close_all)
 
@@ -990,6 +994,10 @@ class MainWindow(QMainWindow):
     def _show_terminals(self) -> None:
         self._term_shown = True
         self._term_btn.setChecked(True)
+        if self._hud_cam_stack.currentIndex() == 1:
+            # The live camera would otherwise keep running behind the
+            # terminals, with its CLOSE button out of reach.
+            self.stop_camera_stream()
         self._hud_cam_stack.setCurrentIndex(3)
         self._term_dock.focus_terminal()
 
@@ -1021,8 +1029,15 @@ class MainWindow(QMainWindow):
         if was and not count and self._term_shown:
             self._hide_terminals()      # the last one closed: give the face back
 
+    def _on_term_running(self, running: int) -> None:
+        self._term_running = running
+
     def terminal_count(self) -> int:
         return self._term_count
+
+    def terminals_running(self) -> int:
+        """Terminals whose shell really started. Safe from any thread."""
+        return self._term_running
 
     def _toggle_fullscreen(self):
         if self.isFullScreen():

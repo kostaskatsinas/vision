@@ -121,6 +121,8 @@ class TerminalView(QWidget):
     """One terminal. Starts its shell the first time it has a real size."""
 
     exited = pyqtSignal()
+    started = pyqtSignal()
+    start_failed = pyqtSignal(str)
     title_changed = pyqtSignal(str)
 
     _PAD = 6
@@ -225,11 +227,13 @@ class TerminalView(QWidget):
             self._session = PtySession(shell_command(self.program), cwd=self._folder,
                                        rows=rows, cols=cols)
         except Exception as e:
-            self.screen.feed(f"Could not start the terminal: {type(e).__name__}: {e}\r\n".encode())
-            self.update()
+            # No shell: the pane is removed by its owner, so a dead terminal
+            # never takes one of the two places.
+            self.start_failed.emit(f"{type(e).__name__}: {e}")
             return
         self._notifier = QSocketNotifier(self._session.fd, QSocketNotifier.Type.Read, self)
         self._notifier.activated.connect(self._on_readable)
+        self.started.emit()
 
     def _on_readable(self, *_a) -> None:
         if self._session is None:
@@ -683,6 +687,7 @@ class TerminalPane(QWidget):
 
         self.view.title_changed.connect(self._on_title)
         self.view.exited.connect(self.close_pane)
+        self.view.start_failed.connect(lambda _why: self.close_pane())
 
     def _on_title(self, title: str) -> None:
         title = " ".join(str(title).split())[:80]
@@ -698,6 +703,8 @@ class TerminalDock(QWidget):
     by side, and the buttons that open them."""
 
     count_changed = pyqtSignal(int)     # how many terminals are open
+    running_changed = pyqtSignal(int)   # how many of them have a shell that started
+    start_failed = pyqtSignal(str)
     hide_requested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -754,6 +761,8 @@ class TerminalDock(QWidget):
             return False
         pane = TerminalPane(program if program in PROGRAMS else "shell", folder)
         pane.closed.connect(self._on_closed)
+        pane.view.started.connect(self._report_running)
+        pane.view.start_failed.connect(self.start_failed.emit)
         self._panes.append(pane)
         self._split.addWidget(pane)
         n = len(self._panes)
@@ -773,6 +782,13 @@ class TerminalDock(QWidget):
         if self._panes:
             self._panes[-1].view.setFocus()
         self.count_changed.emit(len(self._panes))
+        self._report_running()
+
+    def running(self) -> int:
+        return sum(1 for p in self._panes if p.view.running)
+
+    def _report_running(self) -> None:
+        self.running_changed.emit(self.running())
 
     def _sync(self) -> None:
         any_open = bool(self._panes)

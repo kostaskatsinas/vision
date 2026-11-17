@@ -65,6 +65,7 @@ def terminal(parameters: dict, player=None, session_memory=None) -> str:
         if program is None:
             return outcome.failed("terminal", "program must be claude, gemini or shell")
         before = player.terminal_count()
+        running = player.terminals_running()
         if before >= MAX_TERMINALS:
             player.show_terminals(True)
             return outcome.failed(
@@ -76,9 +77,12 @@ def terminal(parameters: dict, player=None, session_memory=None) -> str:
         facts = dict(opened=PROGRAMS[program]["name"], folder=str(folder),
                      folder_not_found=asked if missing else None,
                      note="the user types in it themselves; you cannot type into it or read it")
-        if not _wait(lambda: player.terminal_count() > before):
-            return outcome.unverified("terminal", "the window did not confirm it", **facts)
-        return outcome.done("terminal", **facts)
+        # "Open" means a shell that really started, not a pane that appeared.
+        if _wait(lambda: player.terminals_running() > running, 4.0):
+            return outcome.done("terminal", **facts)
+        if player.terminal_count() <= before:
+            return outcome.failed("terminal", "the shell could not be started; the reason is in the log")
+        return outcome.unverified("terminal", "the window did not confirm that the shell started", **facts)
     except Exception as e:
         return outcome.failed("terminal", f"{type(e).__name__}: {e}")
 

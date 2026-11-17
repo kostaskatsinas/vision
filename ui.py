@@ -288,6 +288,10 @@ class VisionUI:
         """How many built-in terminals are open. Safe from any thread."""
         return self._win.terminal_count()
 
+    def terminals_running(self) -> int:
+        """How many of them have a shell that really started. Safe from any thread."""
+        return self._win.terminals_running()
+
     def terminals_shown(self) -> bool:
         """Whether the terminals page is the one on screen. Safe from any thread."""
         return bool(self._win._term_shown)

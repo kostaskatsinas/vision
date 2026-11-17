@@ -180,14 +180,19 @@ def test_pty() -> None:
 # -- the voice tool ----------------------------------------------------------------
 
 class Player:
-    def __init__(self, count=0, responds=True):
+    def __init__(self, count=0, responds=True, starts=True):
         self.count, self.shown, self.responds, self.calls = count, False, responds, []
+        self.running, self.starts = count, starts
 
     def open_terminal(self, program, folder=""):
         self.calls.append(("open", program, folder))
-        if self.responds:
+        if self.responds and self.starts:
             self.count += 1
+            self.running += 1
             self.shown = True
+
+    def terminals_running(self):
+        return self.running
 
     def show_terminals(self, show=True):
         self.calls.append(("show", show))
@@ -235,7 +240,14 @@ def test_tool() -> None:
         r = term.terminal({"program": "claude"}, player=slow)
     finally:
         term._wait = old
-    check("no confirmation is not 'done'", r.startswith("status=unverified"), r)
+    check("no confirmation is not 'done'", not r.startswith("status=done"), r)
+    dead = Player(starts=False)
+    old, term._wait = term._wait, lambda c, seconds=2.0: bool(c())
+    try:
+        r = term.terminal({"program": "claude"}, player=dead)
+    finally:
+        term._wait = old
+    check("a shell that did not start is a failure", r.startswith("status=failed"), r)
     check("no window", outcome.is_problem(term.terminal({}, player=None)))
     check("tool declared", term.TOOL["name"] == "terminal" and term.TOOL["handler"] is term.terminal)
     props = term.TOOL["parameters"]["properties"]
@@ -334,8 +346,27 @@ def test_widget() -> None:
     check("a place is free again", dock.open("shell") and dock.count() == 2)
     views = [p.view for p in dock._panes]
     spin(lambda: all(v.running for v in views))
+    check("running is counted", dock.running() == 2)
     dock.close_all()
     check("close_all stops them", not any(v.running for v in views))
+
+    # a shell that cannot start must not keep a place
+    import gui.terminal as gt
+    real = gt.PtySession
+    def boom(*a, **k):
+        raise OSError("out of pty devices")
+    gt.PtySession = boom
+    try:
+        d2 = TerminalDock()
+        d2.resize(800, 400)
+        d2.show()
+        why: list[str] = []
+        d2.start_failed.connect(why.append)
+        d2.open("shell")
+        check("failed start frees its place", spin(lambda: d2.count() == 0 and bool(why)), str(why))
+        check("failed start is not running", d2.running() == 0)
+    finally:
+        gt.PtySession = real
     spin(lambda: False, 0.2)
     check("count was reported", counts[:3] == [1, 2, 1], str(counts))
 
