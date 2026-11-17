@@ -2004,6 +2004,131 @@ class VisionLive:
             self._vision_busy = False
         return True
 
+    def _note_resumption(self, response) -> None:
+        """Keep the newest handle the server says a reconnect may resume from."""
+        # ── Session resumption ───────────────────────────────────
+        # The server sends this periodically. `resumable` goes false
+        # while a turn is mid-flight — replaying a handle from that
+        # moment is what the flag exists to prevent — so only
+        # resumable handles are kept. This is three lines and it is
+        # the entire fix for "every reconnect forgets everything".
+        _sru = getattr(response, "session_resumption_update", None)
+        if _sru is not None:
+            if getattr(_sru, "resumable", False) and getattr(_sru, "new_handle", None):
+                if self._resume_handle is None:
+                    print("[VISION] 🔗 Session resumption armed")
+                self._resume_handle = _sru.new_handle
+
+    def _queue_reply_audio(self, response) -> None:
+        """Put the reply's audio on the playback queue, unless it was interrupted."""
+        if response.data:
+            if self._interrupted:
+                pass  # discard: interrupted
+            else:
+                if self._turn_done_event and self._turn_done_event.is_set():
+                    self._turn_done_event.clear()
+                # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
+                # (24000 Hz × 2 bytes/sample × 0.05 s = 2400 bytes per slice)
+                _audio_data = response.data
+                _SLICE = 2400
+                for _i in range(0, len(_audio_data), _SLICE):
+                    self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])
+
+    def _collect_transcripts(self, sc, in_buf: list, out_buf: list) -> None:
+        """Add what was said and heard in this message to the turn's buffers."""
+        if sc.output_transcription and sc.output_transcription.text:
+            txt = _clean_transcript(sc.output_transcription.text)
+            # A turn that involves a tool call passes through
+            # several turn_completes, and the API re-sends the
+            # tail of the transcript across them. Comparing only
+            # against the previous chunk missed that — once
+            # out_buf had been flushed and emptied, the repeat
+            # sailed straight back in, which logged the answer
+            # twice AND made the avatar mouth it twice.
+            if txt and not _is_repeat_chunk(txt, out_buf):
+                out_buf.append(txt)
+                # Hand the words to the mouth as they arrive, so
+                # the avatar can form the consonants the audio
+                # alone cannot show. Pure string work — it adds
+                # nothing measurable to the response path.
+                self._visemes.feed_text(txt)
+
+        if sc.input_transcription and sc.input_transcription.text:
+            txt = _clean_transcript(sc.input_transcription.text)
+            if txt:
+                in_buf.append(txt)
+                self._last_user_speech = time.monotonic()
+
+    def _finish_turn(self, in_buf: list, out_buf: list) -> bool:
+        """Log the finished turn and empty its buffers. True when the turn was an
+        interrupted reply, which is dropped: the caller then skips the rest of
+        this message."""
+        if self._turn_done_event:
+            self._turn_done_event.set()
+
+        # If this turn_complete ends an interrupted response, clear the
+        # flag and skip all further processing for that turn.
+        if self._interrupted:
+            self._interrupted = False
+            in_buf.clear()
+            out_buf.clear()
+            self._visemes.reset()
+            return True
+
+        full_in = " ".join(in_buf).strip()
+        if full_in:
+            self._last_out_logged = ""   # new exchange
+            self.ui.write_log(f"You: {full_in}")
+            self._session_log.append(f"User: {full_in}")
+            if self._dashboard:
+                asyncio.create_task(self._dashboard.broadcast({
+                    "type": "log", "speaker": "user",
+                    "text": full_in,
+                    "ts": datetime.now().isoformat(),
+                }))
+        in_buf.clear()
+
+        full_out = " ".join(out_buf).strip()
+        # Second line of defence: even if a repeat slips
+        # into a *fresh* buffer after a flush, never log the
+        # same answer (or a tail of it) twice in a row.
+        if full_out and len(full_out) >= _REPEAT_MIN and self._last_out_logged:
+            if full_out in self._last_out_logged:
+                full_out = ""
+        if full_out:
+            self._last_out_logged = full_out
+            self.ui.write_log(f"{self._asst_name}: {full_out}")
+            self._session_log.append(f"{self._asst_name}: {full_out}")
+            if self._dashboard:
+                asyncio.create_task(self._dashboard.broadcast({
+                    "type": "log", "speaker": "vision",
+                    "text": full_out,
+                    "ts": datetime.now().isoformat(),
+                }))
+        out_buf.clear()
+
+        if self._vision_close_pending:
+            # This turn_complete IS the vision answer — close camera + release busy flag
+            self._vision_close_pending = False
+            self._vision_busy = False
+            async def _cam_close():
+                await asyncio.sleep(2.0)
+                self.ui.stop_camera_stream()
+            self._keep_task(asyncio.create_task(_cam_close()))
+        return False
+
+    async def _answer_tool_call(self, tool_call) -> None:
+        """Run every function the model asked for and send the results back."""
+        fn_responses = []
+        for fc in tool_call.function_calls:
+            print(f"[VISION] 📞 {fc.name}")
+            fr = await self._execute_tool(fc)
+            fn_responses.append(fr)
+        await self.session.send_tool_response(
+            function_responses=fn_responses
+        )
+        await self._flush_pending_vision()
+
     async def _receive_audio(self):
         print("[VISION] 👂 Recv started")
         out_buf, in_buf = [], []
@@ -2017,122 +2142,19 @@ class VisionLive:
                     # keepalive all count.
                     self._clear_stall()
 
-                    # ── Session resumption ───────────────────────────────────
-                    # The server sends this periodically. `resumable` goes false
-                    # while a turn is mid-flight — replaying a handle from that
-                    # moment is what the flag exists to prevent — so only
-                    # resumable handles are kept. This is three lines and it is
-                    # the entire fix for "every reconnect forgets everything".
-                    _sru = getattr(response, "session_resumption_update", None)
-                    if _sru is not None:
-                        if getattr(_sru, "resumable", False) and getattr(_sru, "new_handle", None):
-                            if self._resume_handle is None:
-                                print("[VISION] 🔗 Session resumption armed")
-                            self._resume_handle = _sru.new_handle
-
-                    if response.data:
-                        if self._interrupted:
-                            pass  # discard: interrupted
-                        else:
-                            if self._turn_done_event and self._turn_done_event.is_set():
-                                self._turn_done_event.clear()
-                            # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
-                            # (24000 Hz × 2 bytes/sample × 0.05 s = 2400 bytes per slice)
-                            _audio_data = response.data
-                            _SLICE = 2400
-                            for _i in range(0, len(_audio_data), _SLICE):
-                                self.audio_in_queue.put_nowait(_audio_data[_i : _i + _SLICE])
+                    self._note_resumption(response)
+                    self._queue_reply_audio(response)
 
                     if response.server_content:
                         sc = response.server_content
+                        self._collect_transcripts(sc, in_buf, out_buf)
 
-                        if sc.output_transcription and sc.output_transcription.text:
-                            txt = _clean_transcript(sc.output_transcription.text)
-                            # A turn that involves a tool call passes through
-                            # several turn_completes, and the API re-sends the
-                            # tail of the transcript across them. Comparing only
-                            # against the previous chunk missed that — once
-                            # out_buf had been flushed and emptied, the repeat
-                            # sailed straight back in, which logged the answer
-                            # twice AND made the avatar mouth it twice.
-                            if txt and not _is_repeat_chunk(txt, out_buf):
-                                out_buf.append(txt)
-                                # Hand the words to the mouth as they arrive, so
-                                # the avatar can form the consonants the audio
-                                # alone cannot show. Pure string work — it adds
-                                # nothing measurable to the response path.
-                                self._visemes.feed_text(txt)
-
-                        if sc.input_transcription and sc.input_transcription.text:
-                            txt = _clean_transcript(sc.input_transcription.text)
-                            if txt:
-                                in_buf.append(txt)
-                                self._last_user_speech = time.monotonic()
-
-                        if sc.turn_complete:
-                            if self._turn_done_event:
-                                self._turn_done_event.set()
-
-                            # If this turn_complete ends an interrupted response, clear the
-                            # flag and skip all further processing for that turn.
-                            if self._interrupted:
-                                self._interrupted = False
-                                in_buf  = []
-                                out_buf = []
-                                self._visemes.reset()
-                                continue
-
-                            full_in = " ".join(in_buf).strip()
-                            if full_in:
-                                self._last_out_logged = ""   # new exchange
-                                self.ui.write_log(f"You: {full_in}")
-                                self._session_log.append(f"User: {full_in}")
-                                if self._dashboard:
-                                    asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "user",
-                                        "text": full_in,
-                                        "ts": datetime.now().isoformat(),
-                                    }))
-                            in_buf = []
-
-                            full_out = " ".join(out_buf).strip()
-                            # Second line of defence: even if a repeat slips
-                            # into a *fresh* buffer after a flush, never log the
-                            # same answer (or a tail of it) twice in a row.
-                            if full_out and len(full_out) >= _REPEAT_MIN and self._last_out_logged:
-                                if full_out in self._last_out_logged:
-                                    full_out = ""
-                            if full_out:
-                                self._last_out_logged = full_out
-                                self.ui.write_log(f"{self._asst_name}: {full_out}")
-                                self._session_log.append(f"{self._asst_name}: {full_out}")
-                                if self._dashboard:
-                                    asyncio.create_task(self._dashboard.broadcast({
-                                        "type": "log", "speaker": "vision",
-                                        "text": full_out,
-                                        "ts": datetime.now().isoformat(),
-                                    }))
-                            out_buf = []
-
-                            if self._vision_close_pending:
-                                # This turn_complete IS the vision answer — close camera + release busy flag
-                                self._vision_close_pending = False
-                                self._vision_busy = False
-                                async def _cam_close():
-                                    await asyncio.sleep(2.0)
-                                    self.ui.stop_camera_stream()
-                                self._keep_task(asyncio.create_task(_cam_close()))
+                        # A dropped (interrupted) turn skips the rest of this message.
+                        if sc.turn_complete and self._finish_turn(in_buf, out_buf):
+                            continue
 
                     if response.tool_call:
-                        fn_responses = []
-                        for fc in response.tool_call.function_calls:
-                            print(f"[VISION] 📞 {fc.name}")
-                            fr = await self._execute_tool(fc)
-                            fn_responses.append(fr)
-                        await self.session.send_tool_response(
-                            function_responses=fn_responses
-                        )
-                        await self._flush_pending_vision()
+                        await self._answer_tool_call(response.tool_call)
         except Exception as e:
             print(f"[VISION] ❌ Recv: {e}")
             traceback.print_exc()
@@ -2742,10 +2764,9 @@ class VisionLive:
             self._engine = None
             await engine.close()
 
-    async def run(self):
-        self._loop = asyncio.get_event_loop()
-        self._reconnect_event = asyncio.Event()
-
+    def _wire_services(self) -> None:
+        """Once per run: bind the confirm gate and the notifiers to the window,
+        tell the audio picker the stream rates, and start the phone dashboard."""
         # ── Wire the shared core services to the interface ───────────────────
         # The confirmation gate is useless without a way to ask, and a memory
         # trim is invisible without a way to say so. Both are bound once here
@@ -2780,6 +2801,260 @@ class VisionLive:
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
+
+    async def _start_session(self, session, tg, resumed_with: bool) -> None:
+        """Everything done once a session is open: reset per-session state, say
+        that Vision is online (asleep or listening), and start the tasks that
+        run for as long as the session lasts."""
+        # Every user turn arms the stall watchdog. Wrapping the
+        # session once covers all eleven send sites — and every one
+        # added later — where instrumenting them by hand would work
+        # until somebody adds the twelfth and it silently is not
+        # covered. The wrapper is per-session, so it goes away with
+        # the session it belongs to.
+        _orig_send = session.send_client_content
+
+        async def _send_and_arm(*a, **kw):
+            result = await _orig_send(*a, **kw)
+            self._arm_stall()
+            return result
+
+        session.send_client_content = _send_and_arm
+
+        self.session          = session
+        self.audio_in_queue   = asyncio.Queue()
+        self.out_queue        = asyncio.Queue(maxsize=200)
+        self._turn_done_event = asyncio.Event()
+        self._rx_deadline     = None
+
+        # Reset transient state that must not carry over from a previous session
+        self._pending_vision       = None
+        self._vision_cam_active    = False
+        self._vision_close_pending = False
+        self._vision_busy          = False
+        self._vision_last_time     = 0.0
+        self._interrupted          = False
+
+        print("[VISION] Connected.")
+        if resumed_with:
+            # Say it plainly: the difference between "it reconnected"
+            # and "it reconnected and still knows what we were doing"
+            # is the whole point, and it is invisible otherwise.
+            self.ui.write_log("SYS: Reconnected — conversation restored.")
+
+        # Wake word: if enabled, come up ASLEEP (mic gated, silent)
+        # until the user says the wake phrase or taps wake in the UI.
+        #
+        # Only on the FIRST connect of a run. A reconnect — a dropped
+        # network, the server rotating the connection — used to put an
+        # assistant the user was talking to back to sleep mid-sentence.
+        #
+        # And never asleep with nothing listening. When the detector
+        # could not start (the package missing for the Python this
+        # launch used, a model that will not load), the assistant used
+        # to sleep for good and only a button could wake it — which
+        # reads exactly as "the wake word stopped working after a
+        # restart". It stays awake now and says why.
+        first_connect = not getattr(self, "_connected_once", False)
+        self._connected_once = True
+        wake_ok = False
+        if self._wake_enabled:
+            # Off the event loop: the first model load takes seconds.
+            wake_ok = await asyncio.to_thread(self._ensure_wake_detector)
+            if not wake_ok:
+                self.ui.write_log(
+                    "SYS: Wake word could not start — listening normally instead. "
+                    "Turn WAKE WORD off and on in CONTROLS to set it up again.")
+        if self._wake_enabled and wake_ok and (first_connect or not self._awake):
+            self._awake = False
+            self.ui.set_state("SLEEPING")
+            self.ui.write_log(f"SYS: VISION online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
+        else:
+            self._awake = True
+            self.ui.set_state("LISTENING")
+            self.ui.write_log("SYS: VISION online.")
+
+        # What this machine will not permit, said once, on screen.
+        #
+        # A Wayland session or a macOS without Accessibility cannot
+        # be typed into, clicked or captured — and the APIs report
+        # success regardless. Telling the user at startup turns
+        # "the assistant is broken" into one sentence they can act
+        # on, and it is said once per session rather than on every
+        # attempt.
+        if not self._platform_notes_shown:
+            self._platform_notes_shown = True
+            try:
+                from core import platform_support
+                for _line in platform_support.describe_for_user(
+                        platform_support.detect()):
+                    self.ui.write_log(_line)
+            except Exception as _e:
+                print(f"[Platform] capability notes unavailable: {_e}")
+
+        if self._dashboard:
+            await self._dashboard.broadcast({"type": "status", "state": "active"})
+
+        self._reconnect_event.clear()  # ignore requests from before this session
+        tg.create_task(self._watch_reconnect())
+        tg.create_task(self._watch_stall())
+        tg.create_task(self._send_realtime())
+        tg.create_task(self._listen_audio())
+        tg.create_task(self._receive_audio())
+        tg.create_task(self._play_audio())
+        tg.create_task(self._run_system_monitor())
+        if self._routines is None:
+            # Routines did not load: the fixed schedules they replaced.
+            tg.create_task(self._run_background_monitor())
+            tg.create_task(self._run_proactive_mode())
+        tg.create_task(self._run_sleep_watch())
+        if self._dashboard:
+            tg.create_task(self._relay_phone_audio())
+
+        # Bring a local engine's speech model up before anybody
+        # speaks. Measured: without it the FIRST sentence waits 8.9
+        # seconds and every one after it 1.2 — and eight seconds of
+        # nothing is how a working assistant gets reported broken.
+        if self._engine is not None:
+            tg.create_task(self._engine.warmup())
+
+        # Morning briefing — fires once per process launch (if enabled).
+        # Skipped in wake-word mode: it comes up asleep, and a briefing
+        # would mean talking while "asleep".
+        # With routines it is the "Opening briefing" routine, which
+        # keeps the same rules (first connect only, not asleep).
+        if self._routines is not None:
+            self._routines.session_started(self._awake)
+        elif not self._briefing_sent and get_brief_enabled() and self._awake:
+            self._briefing_sent = True
+            tg.create_task(self._send_startup_briefing())
+
+    async def _recover(self, e: BaseException, get_live_model, get_resumed_with) -> bool:
+        """Decide what a failed or ended session means. True: reconnect at once.
+        False: reconnect after the usual pause (self._conn_backoff).
+
+        The model name and the "was this a resumed session" flag arrive as
+        callables and are read only where they are needed. A failure before
+        run() has set them (the very first connect) then behaves as it always
+        did: a reconnect signal is still honoured, anything else still fails
+        at the first place that needs the missing value."""
+        # Catches both Exception and BaseExceptionGroup (Python 3.11+
+        # TaskGroup raises BaseExceptionGroup when tasks are cancelled
+        # externally, which `except Exception` would miss, letting the
+        # exception escape the while-loop and causing asyncio.run() to
+        # start shutdown — resulting in "executor after shutdown" errors).
+        # Voluntary reconnect (voice change) — not an error. Rebuild the
+        # session immediately with no backoff and no scary logs.
+        if _is_reconnect_signal(e):
+            print("[VISION] Voluntary reconnect requested.")
+            if not _keep_context_of(e):
+                # A deliberate clean slate (voice change) — drop the
+                # handle so the next connect really does start empty.
+                self._resume_handle = None
+            self._conn_backoff = 0
+            return True
+
+        # A resumption handle the server will not accept — expired, or
+        # belonging to a session it has since dropped. Without this, the
+        # same dead handle would be replayed on every retry and the
+        # assistant would never come back at all: the feature meant to
+        # survive a reconnect would be the thing preventing one. Drop it
+        # once and let the next attempt start clean.
+        if get_resumed_with() and (
+            "resum" in str(e).lower()
+            or "handle" in str(e).lower()
+            or "INVALID_ARGUMENT" in str(e)
+            or "NOT_FOUND" in str(e)
+        ):
+            print("[VISION] 🔗 Resumption handle rejected — starting a fresh session")
+            self.ui.write_log("SYS: Could not restore the conversation — starting fresh.")
+            self._resume_handle = None
+            self._conn_backoff = 0
+            return True
+
+        err_str = str(e)
+        print(f"[VISION] Error ({type(e).__name__}): {e}")
+        traceback.print_exc()
+
+        # Out of quota, or this model is not available to this key —
+        # step down the ladder and reconnect straight away. This is the
+        # difference between "VISION is quieter today" and "VISION does
+        # not start today": one model means one daily limit, and the
+        # limit always arrives mid-conversation.
+        live_model = get_live_model()
+        if _gemini.note_live_failure(live_model, err_str):
+            nxt = _gemini.live_model()
+            self.ui.write_log(
+                f"SYS: Switching to {nxt.split('/')[-1]} — the previous "
+                f"model is out of quota."
+                if nxt != live_model else
+                "SYS: Every live model is rate-limited — retrying.")
+            self._conn_backoff = 0 if nxt != live_model else 15
+            if nxt == live_model:
+                await asyncio.sleep(self._conn_backoff)
+            return True
+
+        # Turn-taking / media / thinking knobs rejected by the server
+        # (preview API drift) — drop them first, because they are the
+        # newest fields and the cheapest to lose. Proactive audio is
+        # tried again on the next pass if the error persists.
+        if self._tuned_live and (
+            "INVALID_ARGUMENT" in err_str
+            or "Unknown name" in err_str
+            or "unexpected keyword" in err_str
+            or "realtime_input" in err_str.lower()
+            or "media_resolution" in err_str.lower()
+            or "thinking" in err_str.lower()
+        ):
+            self._tuned_live = False
+            print("[VISION] Live tuning rejected — reconnecting without it.")
+            return True
+
+        # Proactive audio rejected by the server (preview API drift) —
+        # drop it and reconnect with the plain config.
+        if self._enhanced_live and (
+            "INVALID_ARGUMENT" in err_str
+            or "proactiv" in err_str.lower()
+            or "Unknown name" in err_str
+            or "unexpected keyword" in err_str
+        ):
+            self._enhanced_live = False
+            self.ui.write_log(
+                "SYS: Proactive audio unavailable — reconnecting without it."
+            )
+            return True
+
+        # Invalid API key — stop hammering the API, prompt re-configuration
+        if "API key not valid" in err_str or "1007" in err_str:
+            self.ui.write_log("ERR: API key invalid — please re-enter your key.")
+            self.ui.set_state("SLEEPING")
+            self.ui.prompt_reconfig()
+            while not self.ui._win._ready:
+                await asyncio.sleep(1)
+            print("[VISION] New API key saved — reconnecting...")
+            self._conn_backoff = 3
+            return True
+
+        # Network / timeout errors — log clearly and back off
+        is_net_err = any(k in err_str for k in (
+            "TimeoutError", "timed out", "getaddrinfo", "CancelledError",
+            "ConnectionRefusedError", "OSError", "Cannot connect",
+        ))
+        if is_net_err:
+            _conn_backoff = min(getattr(self, "_conn_backoff", 3) * 2, 60)
+            self._conn_backoff = _conn_backoff
+            self.ui.write_log(
+                f"NET: Connection failed — retrying in {_conn_backoff}s. "
+                "(a VPN may be required)"
+            )
+        else:
+            self._conn_backoff = 3
+        return False
+
+    async def run(self):
+        self._loop = asyncio.get_event_loop()
+        self._reconnect_event = asyncio.Event()
+        self._wire_services()
 
         while True:
             try:
@@ -2826,244 +3101,15 @@ class VisionLive:
                     self._open_session(live_model, config) as session,
                     asyncio.TaskGroup() as tg,
                 ):
-                    # Every user turn arms the stall watchdog. Wrapping the
-                    # session once covers all eleven send sites — and every one
-                    # added later — where instrumenting them by hand would work
-                    # until somebody adds the twelfth and it silently is not
-                    # covered. The wrapper is per-session, so it goes away with
-                    # the session it belongs to.
-                    _orig_send = session.send_client_content
-
-                    async def _send_and_arm(*a, **kw):
-                        result = await _orig_send(*a, **kw)
-                        self._arm_stall()
-                        return result
-
-                    session.send_client_content = _send_and_arm
-
-                    self.session          = session
-                    self.audio_in_queue   = asyncio.Queue()
-                    self.out_queue        = asyncio.Queue(maxsize=200)
-                    self._turn_done_event = asyncio.Event()
-                    self._rx_deadline     = None
-
-                    # Reset transient state that must not carry over from a previous session
-                    self._pending_vision       = None
-                    self._vision_cam_active    = False
-                    self._vision_close_pending = False
-                    self._vision_busy          = False
-                    self._vision_last_time     = 0.0
-                    self._interrupted          = False
-
-                    print("[VISION] Connected.")
-                    if _resumed_with:
-                        # Say it plainly: the difference between "it reconnected"
-                        # and "it reconnected and still knows what we were doing"
-                        # is the whole point, and it is invisible otherwise.
-                        self.ui.write_log("SYS: Reconnected — conversation restored.")
-
-                    # Wake word: if enabled, come up ASLEEP (mic gated, silent)
-                    # until the user says the wake phrase or taps wake in the UI.
-                    #
-                    # Only on the FIRST connect of a run. A reconnect — a dropped
-                    # network, the server rotating the connection — used to put an
-                    # assistant the user was talking to back to sleep mid-sentence.
-                    #
-                    # And never asleep with nothing listening. When the detector
-                    # could not start (the package missing for the Python this
-                    # launch used, a model that will not load), the assistant used
-                    # to sleep for good and only a button could wake it — which
-                    # reads exactly as "the wake word stopped working after a
-                    # restart". It stays awake now and says why.
-                    first_connect = not getattr(self, "_connected_once", False)
-                    self._connected_once = True
-                    wake_ok = False
-                    if self._wake_enabled:
-                        # Off the event loop: the first model load takes seconds.
-                        wake_ok = await asyncio.to_thread(self._ensure_wake_detector)
-                        if not wake_ok:
-                            self.ui.write_log(
-                                "SYS: Wake word could not start — listening normally instead. "
-                                "Turn WAKE WORD off and on in CONTROLS to set it up again.")
-                    if self._wake_enabled and wake_ok and (first_connect or not self._awake):
-                        self._awake = False
-                        self.ui.set_state("SLEEPING")
-                        self.ui.write_log(f"SYS: VISION online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
-                    else:
-                        self._awake = True
-                        self.ui.set_state("LISTENING")
-                        self.ui.write_log("SYS: VISION online.")
-
-                    # What this machine will not permit, said once, on screen.
-                    #
-                    # A Wayland session or a macOS without Accessibility cannot
-                    # be typed into, clicked or captured — and the APIs report
-                    # success regardless. Telling the user at startup turns
-                    # "the assistant is broken" into one sentence they can act
-                    # on, and it is said once per session rather than on every
-                    # attempt.
-                    if not self._platform_notes_shown:
-                        self._platform_notes_shown = True
-                        try:
-                            from core import platform_support
-                            for _line in platform_support.describe_for_user(
-                                    platform_support.detect()):
-                                self.ui.write_log(_line)
-                        except Exception as _e:
-                            print(f"[Platform] capability notes unavailable: {_e}")
-
-                    if self._dashboard:
-                        await self._dashboard.broadcast({"type": "status", "state": "active"})
-
-                    self._reconnect_event.clear()  # ignore requests from before this session
-                    tg.create_task(self._watch_reconnect())
-                    tg.create_task(self._watch_stall())
-                    tg.create_task(self._send_realtime())
-                    tg.create_task(self._listen_audio())
-                    tg.create_task(self._receive_audio())
-                    tg.create_task(self._play_audio())
-                    tg.create_task(self._run_system_monitor())
-                    if self._routines is None:
-                        # Routines did not load: the fixed schedules they replaced.
-                        tg.create_task(self._run_background_monitor())
-                        tg.create_task(self._run_proactive_mode())
-                    tg.create_task(self._run_sleep_watch())
-                    if self._dashboard:
-                        tg.create_task(self._relay_phone_audio())
-
-                    # Bring a local engine's speech model up before anybody
-                    # speaks. Measured: without it the FIRST sentence waits 8.9
-                    # seconds and every one after it 1.2 — and eight seconds of
-                    # nothing is how a working assistant gets reported broken.
-                    if self._engine is not None:
-                        tg.create_task(self._engine.warmup())
-
-                    # Morning briefing — fires once per process launch (if enabled).
-                    # Skipped in wake-word mode: it comes up asleep, and a briefing
-                    # would mean talking while "asleep".
-                    # With routines it is the "Opening briefing" routine, which
-                    # keeps the same rules (first connect only, not asleep).
-                    if self._routines is not None:
-                        self._routines.session_started(self._awake)
-                    elif not self._briefing_sent and get_brief_enabled() and self._awake:
-                        self._briefing_sent = True
-                        tg.create_task(self._send_startup_briefing())
+                    await self._start_session(session, tg, _resumed_with)
 
             except KeyboardInterrupt:
                 raise
             except SystemExit:
                 raise
             except BaseException as e:
-                # Catches both Exception and BaseExceptionGroup (Python 3.11+
-                # TaskGroup raises BaseExceptionGroup when tasks are cancelled
-                # externally, which `except Exception` would miss, letting the
-                # exception escape the while-loop and causing asyncio.run() to
-                # start shutdown — resulting in "executor after shutdown" errors).
-                # Voluntary reconnect (voice change) — not an error. Rebuild the
-                # session immediately with no backoff and no scary logs.
-                if _is_reconnect_signal(e):
-                    print("[VISION] Voluntary reconnect requested.")
-                    if not _keep_context_of(e):
-                        # A deliberate clean slate (voice change) — drop the
-                        # handle so the next connect really does start empty.
-                        self._resume_handle = None
-                    self._conn_backoff = 0
+                if await self._recover(e, lambda: live_model, lambda: _resumed_with):
                     continue
-
-                # A resumption handle the server will not accept — expired, or
-                # belonging to a session it has since dropped. Without this, the
-                # same dead handle would be replayed on every retry and the
-                # assistant would never come back at all: the feature meant to
-                # survive a reconnect would be the thing preventing one. Drop it
-                # once and let the next attempt start clean.
-                if _resumed_with and (
-                    "resum" in str(e).lower()
-                    or "handle" in str(e).lower()
-                    or "INVALID_ARGUMENT" in str(e)
-                    or "NOT_FOUND" in str(e)
-                ):
-                    print("[VISION] 🔗 Resumption handle rejected — starting a fresh session")
-                    self.ui.write_log("SYS: Could not restore the conversation — starting fresh.")
-                    self._resume_handle = None
-                    self._conn_backoff = 0
-                    continue
-
-                err_str = str(e)
-                print(f"[VISION] Error ({type(e).__name__}): {e}")
-                traceback.print_exc()
-
-                # Out of quota, or this model is not available to this key —
-                # step down the ladder and reconnect straight away. This is the
-                # difference between "VISION is quieter today" and "VISION does
-                # not start today": one model means one daily limit, and the
-                # limit always arrives mid-conversation.
-                if _gemini.note_live_failure(live_model, err_str):
-                    nxt = _gemini.live_model()
-                    self.ui.write_log(
-                        f"SYS: Switching to {nxt.split('/')[-1]} — the previous "
-                        f"model is out of quota."
-                        if nxt != live_model else
-                        "SYS: Every live model is rate-limited — retrying.")
-                    self._conn_backoff = 0 if nxt != live_model else 15
-                    if nxt == live_model:
-                        await asyncio.sleep(self._conn_backoff)
-                    continue
-
-                # Turn-taking / media / thinking knobs rejected by the server
-                # (preview API drift) — drop them first, because they are the
-                # newest fields and the cheapest to lose. Proactive audio is
-                # tried again on the next pass if the error persists.
-                if self._tuned_live and (
-                    "INVALID_ARGUMENT" in err_str
-                    or "Unknown name" in err_str
-                    or "unexpected keyword" in err_str
-                    or "realtime_input" in err_str.lower()
-                    or "media_resolution" in err_str.lower()
-                    or "thinking" in err_str.lower()
-                ):
-                    self._tuned_live = False
-                    print("[VISION] Live tuning rejected — reconnecting without it.")
-                    continue
-
-                # Proactive audio rejected by the server (preview API drift) —
-                # drop it and reconnect with the plain config.
-                if self._enhanced_live and (
-                    "INVALID_ARGUMENT" in err_str
-                    or "proactiv" in err_str.lower()
-                    or "Unknown name" in err_str
-                    or "unexpected keyword" in err_str
-                ):
-                    self._enhanced_live = False
-                    self.ui.write_log(
-                        "SYS: Proactive audio unavailable — reconnecting without it."
-                    )
-                    continue
-
-                # Invalid API key — stop hammering the API, prompt re-configuration
-                if "API key not valid" in err_str or "1007" in err_str:
-                    self.ui.write_log("ERR: API key invalid — please re-enter your key.")
-                    self.ui.set_state("SLEEPING")
-                    self.ui.prompt_reconfig()
-                    while not self.ui._win._ready:
-                        await asyncio.sleep(1)
-                    print("[VISION] New API key saved — reconnecting...")
-                    self._conn_backoff = 3
-                    continue
-
-                # Network / timeout errors — log clearly and back off
-                is_net_err = any(k in err_str for k in (
-                    "TimeoutError", "timed out", "getaddrinfo", "CancelledError",
-                    "ConnectionRefusedError", "OSError", "Cannot connect",
-                ))
-                if is_net_err:
-                    _conn_backoff = min(getattr(self, "_conn_backoff", 3) * 2, 60)
-                    self._conn_backoff = _conn_backoff
-                    self.ui.write_log(
-                        f"NET: Connection failed — retrying in {_conn_backoff}s. "
-                        "(a VPN may be required)"
-                    )
-                else:
-                    self._conn_backoff = 3
             finally:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)
