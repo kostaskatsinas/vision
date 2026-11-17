@@ -39,7 +39,7 @@ it, and `./vision.sh --update` pulls the latest code first. More in
 | Feature | What it does |
 |---|---|
 | Real-time voice | A live spoken conversation through the Gemini Live API, in any language. You can interrupt it while it talks. |
-| Wake word | Say **"Vision"** or **"Hey Vision"**. It sleeps until called, goes back to sleep after 2 minutes of quiet, and sends no audio while asleep. Detection runs on your PC (sherpa-onnx). Turn it on in CONTROLS → WAKE WORD. |
+| Wake word | Say **"Vision"** or **"Hey Vision"**. It sleeps until called, goes back to sleep after 2 minutes of quiet or when you tell it to ("go to sleep", "κοιμήσου"), and sends no audio while asleep. Detection runs on your PC (sherpa-onnx). Turn it on in CONTROLS → WAKE WORD. |
 | Push-to-talk | Hold **Ctrl+Space** and the microphone opens; it is closed the rest of the time. |
 | Typing instead of talking | Type a request in the input box; it is handled the same way as speech. |
 | Five voices | Charon, Puck, Kore, Fenrir or Aoede, switched live from the window. |
@@ -275,6 +275,7 @@ python -m actions._google_calendar_tests  # Google Calendar
 python -m actions._cli_helper_tests       # Claude Code and Gemini CLI helpers
 python -m actions._features_tests         # Timers, scenes, Spotify, chat reply
 python -m actions._terminal_tests         # Built-in terminals
+python -m core._sleep_tests               # Going to sleep by voice
 ```
 
 ---

@@ -65,7 +65,7 @@ from memory.memory_manager import (
 # actions/*.py file and are auto-discovered by core.action_loader at startup.
 # Only tools that are tied to live-session state stay inline in this file
 # (screen_process, close_camera, save_memory, manage_monitor, shutdown_vision,
-# system_status).
+# sleep_vision, system_status).
 from core import outcome
 from core.action_loader import strip_meta
 from actions.screen_processor  import _capture_camera, _capture_screen
@@ -453,7 +453,23 @@ TOOL_DECLARATIONS = [
             "Shuts down the assistant completely. Call this ONLY when the user clearly asks to close, "
             "quit or shut down the assistant itself. Do NOT call it for "
             "'stop', 'thanks', 'goodbye' or 'close <some app>'; 'stop' means "
+            "stop', 'thanks', 'goodbye' or 'close <some app>'; 'stop' means "
             "stop talking. The user can say this in ANY language."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {},
+        }
+    },
+    {
+        "name": "sleep_vision",
+        "description": (
+            "Puts the assistant to sleep: it stops listening until the user says "
+            "the wake word again. Call this when the user tells YOU to sleep, go "
+            "to sleep, stop listening, rest or stand by, in ANY language (Greek: "
+            "'κοιμήσου', 'πήγαινε για ύπνο'). Do NOT call shutdown_vision for "
+            "this, and do NOT call it to turn the screen off or put the computer "
+            "itself to sleep."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -749,6 +765,10 @@ class VisionLive:
         self._awake            = not self._wake_enabled
         self._wake_detector: WakeWordDetector | None = None
         self._wake_sleep_timeout = WAKE_SLEEP_TIMEOUT
+        # True while asleep because the user SAID "sleep" with the wake word
+        # switched off. The wake word is turned on for that one sleep (never
+        # saved) and goes back off the moment the assistant wakes.
+        self._wake_for_one_sleep = False
 
         # Restore the saved push-to-talk preference. Doing it here rather than
         # in __init__ means the hotkey thread only exists once there is a
@@ -789,10 +809,18 @@ class VisionLive:
         """Called from the detector thread when the wake phrase is heard."""
         self.wake(reason="wake word")
 
+    def _end_one_sleep(self) -> None:
+        """Woken from a sleep the user asked for with the wake word off: turn the
+        wake word back off, so it does not start auto-sleeping after 2 minutes."""
+        if getattr(self, "_wake_for_one_sleep", False):
+            self._wake_for_one_sleep = False
+            self._wake_enabled = False
+
     def wake(self, reason: str = "wake word") -> None:
         if self._awake:
             return
         self._awake = True
+        self._end_one_sleep()
         self._last_user_speech = time.monotonic()   # start the auto-sleep clock now
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
@@ -834,6 +862,7 @@ class VisionLive:
             if not wake_is_ready():
                 return "need_download"
             self._wake_enabled = True
+            self._wake_for_one_sleep = False    # it is on for good now
             save_wake_word_enabled(True)
             if not self._ensure_wake_detector():
                 self.ui.write_log("SYS: Wake word is on, but the detector could not start — "
@@ -1307,6 +1336,7 @@ class VisionLive:
             # without having to say the wake word first.
             if self._wake_enabled and not self._awake:
                 self._awake = True
+                self._end_one_sleep()
                 self._last_user_speech = time.monotonic()
         # Releasing the key ends the turn. On Live the server works that out from
         # the audio; a local pipeline has no server, so the release IS the
@@ -1600,6 +1630,7 @@ class VisionLive:
             "system_status":   self._tool_system_status,
             "manage_monitor":  self._tool_manage_monitor,
             "shutdown_vision": self._tool_shutdown_vision,
+            "sleep_vision":    self._tool_sleep_vision,
         }
 
     async def _tool_recall_memory(self, args: dict) -> str:
@@ -1675,6 +1706,56 @@ class VisionLive:
         self.ui.write_log("SYS: Shutdown requested.")
         self._keep_task(asyncio.create_task(self._shutdown_after_goodbye()))
         return "Done."
+
+    async def _tool_sleep_vision(self, args: dict) -> str:
+        """The user said "sleep". Before this tool existed the model had no way
+        to act on it: it answered "okay" and went on listening.
+
+        The sleep itself waits until the short reply has been heard. Sleeping at
+        once would hand the mic to the wake word detector while the speakers are
+        still playing the reply, and a reply that says the assistant's name
+        would wake it straight back up."""
+        not_asleep = ("Not asleep, still listening: {why} Tell the user that in one "
+                      "short sentence. Do not call any tools.")
+        if not self._wake_enabled:
+            if not wake_is_ready():
+                return not_asleep.format(
+                    why="the wake word is not set up, so nothing could wake me by "
+                        "voice. It is set up from CONTROLS, WAKE WORD.")
+            if not await asyncio.to_thread(self._ensure_wake_detector):
+                return not_asleep.format(
+                    why="the wake word could not start, so nothing could wake me by "
+                        "voice. Turning WAKE WORD off and on in CONTROLS sets it up again.")
+            # On for this one sleep only; wake() turns it back off. Not saved.
+            self._wake_enabled = True
+            self._wake_for_one_sleep = True
+        elif not await asyncio.to_thread(self._ensure_wake_detector):
+            return not_asleep.format(
+                why="the wake word could not start, so nothing could wake me by "
+                    "voice. Turning WAKE WORD off and on in CONTROLS sets it up again.")
+        if self._turn_done_event:
+            self._turn_done_event.clear()     # set again when the reply ends
+        self._keep_task(asyncio.create_task(self._sleep_after_reply()))
+        return (f"Going to sleep as soon as this reply ends. Reply with only a few "
+                f"words, such as 'Okay, sleeping.', in the language the user speaks. "
+                f"Do not say the name '{WAKE_PHRASE}': it would wake me straight back "
+                f"up. Do not call any tools.")
+
+    async def _sleep_after_reply(self) -> None:
+        try:
+            if self._turn_done_event:
+                await asyncio.wait_for(self._turn_done_event.wait(), timeout=8.0)
+        except TimeoutError:
+            pass
+        deadline = time.monotonic() + 6.0
+        while time.monotonic() < deadline:
+            with self._speaking_lock:
+                if not self._is_speaking:
+                    break
+            await asyncio.sleep(0.2)
+        await asyncio.sleep(0.4)
+        if self._wake_enabled:
+            self.sleep(reason="you asked me to")
 
     async def _shutdown_after_goodbye(self) -> None:
         # The goodbye is said while the summary is written, and the process
