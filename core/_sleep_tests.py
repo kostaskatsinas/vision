@@ -309,6 +309,12 @@ async def test_idle_what_counts() -> None:
     await v._sleep_watch_tick()
     check("pressing push-to-talk restarts the clock", v._awake and v._quiet_seconds() < 5)
 
+    import inspect
+    src = inspect.getsource(main.VisionLive._process_dashboard_commands)
+    check("a phone dashboard command restarts the clock",
+          src.find("_note_user_activity()") != -1
+          and src.find("_note_user_activity()") < src.find("send_client_content"))
+
 
 async def test_idle_not_set_up() -> None:
     main.wake_is_ready = lambda: False

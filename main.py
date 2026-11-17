@@ -2766,6 +2766,7 @@ class VisionLive:
                     # has no desktop WAKE button — so it wakes VISION if asleep.
                     if self._wake_enabled and not self._awake:
                         self.wake(reason="remote command")
+                    self._note_user_activity()   # restarts the auto-sleep clock
                     await self.session.send_client_content(
                         turns={"role": "user", "parts": [{"text": text}]},
                         turn_complete=True,
