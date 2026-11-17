@@ -59,7 +59,8 @@ it, and `./vision.sh --update` pulls the latest code first. More in
 | Window layout | With the GNOME Tiling Shell extension: tile left, right, top, bottom or centre, span tiles, untile, focus the next tile, cycle layouts, open the layout editor. |
 | Move windows between monitors | "Move this window to monitor 3", "move it to the right screen". |
 | Workspace scenes | "Save a scene called work: terminal on monitor 1 on the left, Chrome on monitor 2, Spotify on monitor 3", then "start my work scene". The apps open one after another, each on its monitor and tile; ones already running are moved there instead. Add or remove an app, list scenes or delete one by voice. Saving over a scene and deleting one can be undone. |
-| Window shortcuts | Fullscreen, minimise, maximise, snap left or right, switch window, show desktop, lock the screen, open settings or the file manager. |
+| Minimise, maximise, restore | Name the app ("minimise Spotify", "maximise Chrome") and only that app's window changes, whichever window has focus. Uses Vision's small GNOME window helper (see below). |
+| Window shortcuts | Fullscreen, snap left or right, switch window, show desktop, lock the screen, open settings or the file manager. |
 
 ### Screen, keyboard and mouse (works on Wayland)
 
@@ -195,7 +196,7 @@ The full list of what asks first is in [docs/VISION.md](docs/VISION.md#ask-first
 | Microphone and speakers | Needed for voice. |
 | Gemini API key | Needed for the default engine. A fully local setup needs none. |
 | GPU | Not needed. |
-| Optional system tools | `pactl` (volume), `brightnessctl` (brightness), `playerctl` (media), `gst-launch-1.0` with the PipeWire plugin (screen on Wayland), GNOME Tiling Shell extension (window tiling). |
+| Optional system tools | `pactl` (volume), `brightnessctl` (brightness), `playerctl` (media), `gst-launch-1.0` with the PipeWire plugin (screen on Wayland), GNOME Tiling Shell extension (window tiling). Vision's own GNOME window helper (`gnome-extension/vision-windows@vision`) is installed and enabled by `./vision.sh`; the first time, log out and back in once so GNOME loads it. |
 
 ---
 
@@ -276,6 +277,7 @@ python -m actions._cli_helper_tests       # Claude Code and Gemini CLI helpers
 python -m actions._features_tests         # Timers, scenes, Spotify, chat reply
 python -m actions._terminal_tests         # Built-in terminals
 python -m core._sleep_tests               # Going to sleep by voice
+python -m core._window_control_tests      # Minimise / maximise the named app only
 ```
 
 ---

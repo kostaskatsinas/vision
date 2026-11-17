@@ -1,4 +1,5 @@
 #computer_settings.py
+import os
 import re
 import shutil
 import time
@@ -230,15 +231,67 @@ def close_window():
 def full_screen():
     pyautogui.press("f11")
 
+# ── Minimize / maximize ──────────────────────────────────────────────────────
+# These three are only the "no app was named" fallback, for when GNOME's
+# window helper is not running. A NAMED app never comes here: see
+# _window_action() and core/window_control.py.
+#
+# What they replaced, and why it changed other apps:
+#   minimize  pressed win+down, which on GNOME UN-maximizes the window in
+#             front rather than minimizing anything.
+#   maximize  ran `wmctrl -r :ACTIVE:`. On Wayland wmctrl only sees XWayland
+#             windows, so ":ACTIVE:" was the last X11 window that had focus -
+#             typically a different app from the one in front - and wmctrl
+#             reported success, so the fallback never ran either.
+# Now: GNOME's own shortcut for the action, read from its settings, which the
+# Shell applies to the window that really is in front.
+_WM_DEFAULT_KEYS = {
+    "minimize":   ("super", "h"),
+    "maximize":   ("super", "up"),
+    "unmaximize": ("super", "down"),
+}
+
+
+def _wm_keys(name: str) -> tuple:
+    try:
+        from core import wayland_desktop
+        out = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.wm.keybindings", name],
+            capture_output=True, text=True, timeout=1.5).stdout.strip()
+        import ast as _ast
+        for raw in _ast.literal_eval(out.removeprefix("@as").strip()):
+            keys = wayland_desktop.parse_gtk_accelerator(raw)
+            if keys:
+                return keys
+    except Exception:
+        pass
+    return _WM_DEFAULT_KEYS[name]
+
+
+def _wm_shortcut(name: str):
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() != "wayland" and shutil.which("wmctrl"):
+        # A real X11 session: :ACTIVE: there is the window in front.
+        if name == "minimize" and shutil.which("xdotool"):
+            subprocess.run(["xdotool", "getactivewindow", "windowminimize"],
+                           capture_output=True, timeout=5)
+            return
+        if name in ("maximize", "unmaximize"):
+            op = "add" if name == "maximize" else "remove"
+            subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b",
+                            f"{op},maximized_vert,maximized_horz"],
+                           capture_output=True, timeout=5)
+            return
+    pyautogui.hotkey(*_wm_keys(name))
+
+
 def minimize_window():
-    pyautogui.hotkey("win", "down")
+    _wm_shortcut("minimize")
 
 def maximize_window():
-    try:
-        subprocess.run(["wmctrl", "-r", ":ACTIVE:", "-b", "add,maximized_vert,maximized_horz"],
-            capture_output=True)
-    except Exception:
-        pyautogui.hotkey("super", "up")
+    _wm_shortcut("maximize")
+
+def unmaximize_window():
+    _wm_shortcut("unmaximize")
 
 def snap_left():
     try:
@@ -522,6 +575,8 @@ ACTION_MAP: dict[str, callable] = {
     "fullscreen":          full_screen,
     "minimize":            minimize_window,
     "maximize":            maximize_window,
+    "unmaximize":          unmaximize_window,
+    "restore":             unmaximize_window,
     "snap_left":           snap_left,
     "snap_right":          snap_right,
     "switch_window":       switch_window,
@@ -708,6 +763,60 @@ def _suggest(description: str) -> str:
         f"are: {hint}. Which was meant?",
         said=description)
 
+# Spoken names for the window actions -> what core/window_control.py calls them.
+_WINDOW_ACTIONS = {
+    "minimize": "minimize", "minimise": "minimize", "minimize_window": "minimize",
+    "maximize": "maximize", "maximise": "maximize", "maximize_window": "maximize",
+    "unmaximize": "unmaximize", "unmaximise": "unmaximize",
+    "restore": "restore", "restore_window": "restore", "unminimize": "restore",
+}
+
+
+def _window_action(what: str, app_name: str) -> str:
+    """Minimize / maximize / restore. With an app named, ONLY that app's
+    windows change - found by name inside GNOME, never by focus. With no app
+    named, the window in front, but never Vision's own."""
+    from core import window_control as wc
+    if app_name:
+        try:
+            info = wc.act_on_app(app_name, what)
+        except wc.WindowError as e:
+            return outcome.failed("computer_settings", str(e), wanted=what,
+                                  app=app_name)
+        except Exception as e:
+            return outcome.failed("computer_settings", f"it failed: {e}",
+                                  wanted=what, app=app_name)
+        facts = dict(wanted=what, app=info["app"],
+                     windows=info["windows"] if info["windows"] > 1 else None)
+        if info.get("verified"):
+            return outcome.done("computer_settings", verified=True, **facts)
+        return outcome.unverified(
+            "computer_settings",
+            "the request was accepted but the window's new state could not be "
+            "read back", **facts)
+
+    try:
+        info = wc.act_on_focused(what)
+        if info.get("verified"):
+            return outcome.done("computer_settings", wanted=what,
+                                app=info["app"], verified=True)
+        return outcome.unverified(
+            "computer_settings",
+            "the request was accepted but the window's new state could not be "
+            "read back", wanted=what, app=info["app"])
+    except wc.HelperMissing:
+        pass                        # fall back to GNOME's own shortcut below
+    except wc.WindowError as e:
+        return outcome.failed("computer_settings", str(e), wanted=what)
+    func = {"minimize": minimize_window, "maximize": maximize_window}.get(
+        what, unmaximize_window)
+    try:
+        func()
+    except Exception as e:
+        return outcome.failed("computer_settings", f"it failed: {e}", wanted=what)
+    return outcome.done("computer_settings", wanted=what, window="the one in front")
+
+
 def computer_settings(
     parameters: dict = None,
     response=None,
@@ -880,6 +989,10 @@ def computer_settings(
             f"video_player action='seek' instead, which is exact",
             wanted=action, seconds=seconds)
 
+    if action in _WINDOW_ACTIONS:
+        return _window_action(_WINDOW_ACTIONS[action],
+                              str(params.get("app_name") or "").strip())
+
     func = ACTION_MAP.get(action)
     if not func:
         return _suggest(raw_action or description)
@@ -1002,7 +1115,7 @@ def computer_settings(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "computer_settings",
-    "description": "Controls the computer: volume, mute, brightness, media playback (play/pause, next, previous, seek), window management, keyboard shortcuts, typing text on screen, fullscreen, dark mode, WiFi, restart, shutdown, scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. Use for ANY single computer control command. NUMBERS MATTER: a level the user names is volume_set / brightness_set with value = that level ('volume to 100', 'max' = 100, 'half' = 50); an amount to change by is volume_up / volume_down / brightness_up / brightness_down with value = the amount ('30 louder' = 30; no amount = 10). Never approximate a level with repeated up/down calls. For a key worth repeating (zoom_in, next_tab, go_back, page_down, undo...) pass `times`. Media keys reach music and video apps without focusing them; seek_forward / seek_backward take value = seconds and act on the app in front (for a video on the assistant's own display use video_player instead). restart, shutdown and toggle_wifi put a confirmation on the user's screen and do NOT happen until they press it — never claim they are done. Volume, mute, brightness and dark mode can be reversed with the `undo` tool.",
+    "description": "Controls the computer: volume, mute, brightness, media playback (play/pause, next, previous, seek), window management (minimize / maximize / restore: pass the app in 'app_name' and only that app's window changes), keyboard shortcuts, typing text on screen, fullscreen, dark mode, WiFi, restart, shutdown, scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. Use for ANY single computer control command. NUMBERS MATTER: a level the user names is volume_set / brightness_set with value = that level ('volume to 100', 'max' = 100, 'half' = 50); an amount to change by is volume_up / volume_down / brightness_up / brightness_down with value = the amount ('30 louder' = 30; no amount = 10). Never approximate a level with repeated up/down calls. For a key worth repeating (zoom_in, next_tab, go_back, page_down, undo...) pass `times`. Media keys reach music and video apps without focusing them; seek_forward / seek_backward take value = seconds and act on the app in front (for a video on the assistant's own display use video_player instead). restart, shutdown and toggle_wifi put a confirmation on the user's screen and do NOT happen until they press it — never claim they are done. Volume, mute, brightness and dark mode can be reversed with the `undo` tool.",
     # Used in place of `description` only when a small model is on a tool
     # budget - Gemini still gets the full text. See providers/schema.py.
     "brief": (
@@ -1030,7 +1143,7 @@ TOOL = {
                     "media_play_pause | media_next | media_previous | media_stop | "
                     "seek_forward | seek_backward | "
                     "pause_video | close_window | full_screen | "
-                    "minimize | maximize | snap_left | snap_right | "
+                    "minimize | maximize | restore | snap_left | snap_right | "
                     "switch_window | show_desktop | task_manager | focus_search | "
                     "refresh_page | close_tab | new_tab | next_tab | prev_tab | "
                     "go_back | go_forward | zoom_in | zoom_out | zoom_reset | "
@@ -1056,6 +1169,15 @@ TOOL = {
                     "brightness_up/down: how much to change by (default 10). "
                     "seek_forward/backward: seconds. scroll_up/down: wheel notches. "
                     "type_text: the text. press_key: the key name."
+                )
+            },
+            "app_name": {
+                "type": "STRING",
+                "description": (
+                    "minimize / maximize / restore: the application whose window "
+                    "to change, as the user named it ('Spotify', 'Chrome'). ALWAYS "
+                    "pass it when the user names an app - only that app's window "
+                    "changes. Leave it empty only for 'minimize this window'."
                 )
             },
             "times": {
