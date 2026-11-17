@@ -174,6 +174,29 @@ def save_wake_word_enabled(enabled: bool) -> None:
     _write_config(data)
 
 
+# Minutes of quiet before the assistant puts itself to sleep while the wake
+# word is OFF (with it on, the 2-minute auto-sleep applies instead). 0 = never.
+IDLE_SLEEP_DEFAULT_MINUTES = 60
+IDLE_SLEEP_CHOICES = (0, 30, 60, 120)
+
+
+def get_idle_sleep_minutes() -> int:
+    """How long Vision waits with nobody talking to it before it sleeps."""
+    try:
+        v = int(load_api_keys().get("idle_sleep_minutes", IDLE_SLEEP_DEFAULT_MINUTES))
+    except (TypeError, ValueError):
+        return IDLE_SLEEP_DEFAULT_MINUTES
+    return max(0, min(v, 24 * 60))
+
+
+@_locked
+def save_idle_sleep_minutes(minutes: int) -> None:
+    ensure_config_dir()
+    data = _read_for_write()
+    data["idle_sleep_minutes"] = max(0, min(int(minutes), 24 * 60))
+    _write_config(data)
+
+
 def get_push_to_talk_enabled() -> bool:
     """Hold-a-key-to-speak. When on, the mic is closed unless the chord is held."""
     return load_api_keys().get("push_to_talk_enabled", False)

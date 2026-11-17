@@ -39,7 +39,7 @@ it, and `./vision.sh --update` pulls the latest code first. More in
 | Feature | What it does |
 |---|---|
 | Real-time voice | A live spoken conversation through the Gemini Live API, in any language. You can interrupt it while it talks. |
-| Wake word | Say **"Vision"** or **"Hey Vision"**. It sleeps until called, goes back to sleep after 2 minutes of quiet or when you tell it to ("go to sleep", "κοιμήσου"), and sends no audio while asleep. Detection runs on your PC (sherpa-onnx). Turn it on in CONTROLS → WAKE WORD. |
+| Wake word | Say **"Vision"** or **"Hey Vision"**. It sleeps until called, goes back to sleep after 2 minutes of quiet or when you tell it to ("go to sleep", "κοιμήσου"), and sends no audio while asleep. Detection runs on your PC (sherpa-onnx). Turn it on in CONTROLS → WAKE WORD. With the wake word off, Vision still puts itself to sleep after 1 hour with nobody talking to it, if the wake word is downloaded; change or turn this off with CONTROLS → AUTO-SLEEP (off, 30 min, 1 hour, 2 hours). |
 | Push-to-talk | Hold **Ctrl+Space** and the microphone opens; it is closed the rest of the time. |
 | Typing instead of talking | Type a request in the input box; it is handled the same way as speech. |
 | Five voices | Charon, Puck, Kore, Fenrir or Aoede, switched live from the window. |
