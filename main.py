@@ -835,9 +835,18 @@ class VisionLive:
         self._awake = True
         self._end_one_sleep()
         self._last_user_speech = time.monotonic()   # start the auto-sleep clock now
-        if not self.ui.muted:
-            self.ui.set_state("LISTENING")
+        # Always, even muted: the HUD shows MUTED over any state, but the face
+        # reads the state to know it is awake, and left at SLEEPING it would
+        # keep its eyes shut while awake.
+        self.ui.set_state("LISTENING")
         self.ui.write_log(f"SYS: Awake — {reason}.")
+
+    def _rest_state(self) -> str:
+        """What the HUD shows when nothing is happening: SLEEPING while the
+        wake-word gate is closed, LISTENING otherwise. Speech or a tool that
+        runs while asleep (a timer going off) must hand back to SLEEPING, or
+        the face opens its eyes while the assistant is still asleep."""
+        return "SLEEPING" if (self._wake_enabled and not self._awake) else "LISTENING"
 
     def sleep(self, reason: str = "timeout") -> None:
         if not self._awake:
@@ -1371,7 +1380,7 @@ class VisionLive:
         if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
-            self.ui.set_state("LISTENING")
+            self.ui.set_state(self._rest_state())
 
     def set_push_to_talk(self, enabled: bool) -> str:
         """Turn hold-to-talk on or off. Returns the scope actually achieved."""
@@ -1920,7 +1929,7 @@ class VisionLive:
                 update_memory({category: {key: {"value": value}}})
                 print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
             if not self.ui.muted:
-                self.ui.set_state("LISTENING")
+                self.ui.set_state(self._rest_state())
             return types.FunctionResponse(
                 id=fc.id, name=name,
                 response={"result": "ok", "silent": True}
@@ -1943,7 +1952,7 @@ class VisionLive:
             self.speak_error(name, e)
 
         if not self.ui.muted:
-            self.ui.set_state("LISTENING")
+            self.ui.set_state(self._rest_state())
 
         # How long the tool itself took. A long silence after a tool call is
         # either this number or the model's own time before and after it — and

@@ -2802,12 +2802,24 @@ class MainWindow(QMainWindow):
         self._muted = muted
         self.hud.muted = muted
         self._style_mute_btn()
+        # Muting or unmuting does not wake the assistant, so while it is asleep
+        # the state stays SLEEPING and the face keeps its eyes shut. The HUD
+        # still says MUTED, because it reads the mute flag first.
+        asleep = self._asleep_now()
         if muted:
-            self._apply_state("MUTED")
+            self._apply_state("SLEEPING" if asleep else "MUTED")
             self._log.append_log("SYS: Microphone muted." + (f" {note}" if note else ""))
         else:
-            self._apply_state("LISTENING")
+            self._apply_state("SLEEPING" if asleep else "LISTENING")
             self._log.append_log("SYS: Microphone active." + (f" {note}" if note else ""))
+
+    def _asleep_now(self) -> bool:
+        """True while the wake-word gate is closed (the assistant is asleep)."""
+        try:
+            st = self.wake_get_state() if self.wake_get_state else None
+            return bool(st and st.get("enabled") and not st.get("awake"))
+        except Exception:
+            return False
 
     def _style_mute_btn(self):
         if self._muted:

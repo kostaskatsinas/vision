@@ -167,7 +167,7 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 | Feature | What it does |
 |---|---|
 | HUD | Glass panels, CPU / RAM / GPU / network gauges, an activity log, and a TASKS / ROUTINES panel. |
-| Face or reactor | An animated head with real lip-sync, blinking and gaze, or a 3-D reactor core. Both drawn in software, no GPU needed. While nothing is happening it redraws less often, and less again while asleep or muted, to leave the CPU alone. |
+| Face or reactor | An animated head with real lip-sync, blinking and gaze, or a 3-D reactor core. Both drawn in software, no GPU needed. While nothing is happening it redraws less often, and less again while muted, to leave the CPU alone. Asleep, the face shuts its eyes and holds still, and redraws about once a second. |
 | Theme | Recolour the whole window from a colour wheel or a hex code. |
 | Customise | Change the assistant's name, your name, the voice and the colour (SETUP → CUSTOMISE ASSISTANT). |
 | Audio devices | Pick the microphone and speakers by name, test each with a live meter or a tone, and set the output volume (SETUP → AUDIO DEVICES). |
@@ -280,6 +280,7 @@ python -m actions._features_tests         # Timers, scenes, Spotify, chat reply
 python -m actions._weather_news_tests     # Spoken weather and Greek news
 python -m actions._terminal_tests         # Built-in terminals
 python -m core._sleep_tests               # Going to sleep by voice
+python -m core._sleep_face_tests          # The face shuts its eyes and holds still asleep
 python -m core._window_control_tests      # Minimise / maximise the named app only
 ```
 
