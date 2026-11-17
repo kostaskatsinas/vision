@@ -98,6 +98,56 @@ you how it went.
 | Any plugin whose name contains send, mail, message, install or delete | yes |
 | Everything else | no |
 
+## Face and voice
+
+Vision can learn Kostas's face and voice and then lock every risky action to
+him. Code: `core/identity.py` (recognising), `actions/identity_tool.py` (the
+`identity` voice tool), one check in `core/confirm.py`. Tests:
+`python -m core._identity_tests`.
+
+| Say | What happens |
+|---|---|
+| "learn my face" | The webcam is on for a few seconds. Sit alone in front of it and move your head a little. |
+| "learn my voice" | The text to read appears under the face. Read it, or just talk, for about 20 seconds. What you say meanwhile is not sent to Gemini. |
+| "do you know who I am?" | Vision checks your voice, then the camera, and says if it is you. |
+| "forget my face" / "forget my voice" / "forget both" | Behind the CONFIRM banner, which is itself locked to you. |
+
+**The lock.** Once a face or a voice is learned, every action that shows the
+CONFIRM banner (the table in [Ask-first rule](#ask-first-rule), plus restart,
+shutdown and WiFi off) first checks that you asked. It scores the last thing
+said into the PC microphone against your voice. If that does not match (a
+typed or phone command, a very short sentence, a cold), it looks through the
+webcam for up to 2.5 seconds. If neither matches, Vision says only Kostas can
+ask for that, and nothing is shown or done. Ordinary requests are not locked.
+Closing Vision ("shut down", "close Vision", the window's close button) is
+never locked and never asks.
+
+Learning again when something is already learned needs you too, so a guest
+cannot replace your face with theirs.
+
+**Greeting.** When Vision wakes (wake word, WAKE NOW), it looks through the
+camera once and greets you by name, at most once every 30 minutes. Set
+`"identity_greet": false` in `config/api_keys.json` to turn it off.
+
+**What is stored.** 128 numbers per face frame and 192 per voice piece, in
+`config/identity/face.npy` and `voice.npy` (mode 600). No photo and no
+recording is saved. The models are downloaded once from GitHub on the first
+"learn", checked by SHA-256, into `config/identity/models/`: OpenCV YuNet and
+SFace for the face (39 MB), NVIDIA TitaNet-small for the voice (40 MB). They run
+on the CPU. The voice model runs on sherpa-onnx, the wake word's engine; if it
+is not installed, "learn my voice" asks on the banner before installing it.
+
+**Tuning.** Every check writes its score to the activity log
+(`Owner check: voice matched (0.81)`). Defaults: voice 0.60, face 0.40
+(cosine). Change them with `identity_voice_threshold` and
+`identity_face_threshold` in `config/api_keys.json`. Measured in the cloud on
+20 synthetic voices: the owner scored 0.83 to 0.93 on commands, others 0.19 to
+0.35. Not yet measured with a real microphone.
+
+**Limits.** A good photo can fool the face check and a recording can fool the
+voice check. It stops guests, children and the TV, not a determined attacker.
+If you are ever locked out, delete the folder `config/identity/`.
+
 ## Google Calendar
 
 `actions/google_calendar.py` talks to the Google Calendar API with your own

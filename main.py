@@ -86,6 +86,7 @@ from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
 from core                      import ask_first
+from core                      import identity
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
@@ -840,6 +841,12 @@ class VisionLive:
         # keep its eyes shut while awake.
         self.ui.set_state("LISTENING")
         self.ui.write_log(f"SYS: Awake — {reason}.")
+        # Vision: look once and greet the owner by name (no-op until a face is
+        # learned; config identity_greet=false turns it off).
+        try:
+            identity.greet_if_owner(self.plugin_say)
+        except Exception as e:
+            print(f"[Identity] greet: {e}")
 
     def _rest_state(self) -> str:
         """What the HUD shows when nothing is happening: SLEEPING while the
@@ -1349,6 +1356,7 @@ class VisionLive:
             self.ui.write_log(f"SYS: I'm asleep — say '{WAKE_PHRASE}' or tap WAKE NOW first.")
             return
         self._note_user_activity()
+        identity.heard_elsewhere()     # typed: the mic's last voice is not behind it
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
@@ -2055,6 +2063,11 @@ class VisionLive:
                 return
             
             if not self.ui.muted and not self._phone_active:
+                # Vision: keep the last few seconds for the owner check, and
+                # while a voice is being learned keep the audio away from the
+                # model so it does not answer the passage being read.
+                if identity.listen(indata):
+                    return
                 data = indata.tobytes()
                 loop.call_soon_threadsafe(
                     self.out_queue.put_nowait,
@@ -2743,6 +2756,7 @@ class VisionLive:
                 self._phone_active = False
                 continue
             self._phone_active = True   # phone is streaming — silence PC mic
+            identity.heard_elsewhere()  # the PC mic did not hear this speaker
             with self._speaking_lock:
                 speaking = self._is_speaking
             if not speaking and not self.ui.muted:
@@ -2776,6 +2790,7 @@ class VisionLive:
                     if self._wake_enabled and not self._awake:
                         self.wake(reason="remote command")
                     self._note_user_activity()   # restarts the auto-sleep clock
+                    identity.heard_elsewhere()   # not the PC mic's voice
                     await self.session.send_client_content(
                         turns={"role": "user", "parts": [{"text": text}]},
                         turn_complete=True,
@@ -2930,6 +2945,9 @@ class VisionLive:
         # Vision: deletes, messages and installs wait for an on-screen click.
         # Once confirmed, the result is passed back so the assistant can say it.
         ask_first.bind(self._tell_model)
+        # Vision: once the owner's face or voice is learned, those banners are
+        # only shown when the owner asked (core/identity.py).
+        identity.bind(self.ui.write_log)
 
         # Tell the device picker the exact rates the streams open at, from the
         # constants that actually open them — so it can never list a device that

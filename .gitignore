@@ -22,6 +22,7 @@ memory/scenes.json
 memory/timers.json
 memory/tasks/
 memory/*.db
+config/identity/             # your face and voice fingerprints and their models
 
 # ── Python build noise ────────────────────────────────────────────────────────
 __pycache__/

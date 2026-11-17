@@ -103,6 +103,12 @@ def describe(name: str, args: dict, is_plugin: bool = False) -> Optional[tuple[s
         from actions import chat_reply
         return chat_reply.confirmation(args)
 
+    if name == "identity":
+        # Forgetting the learned face or voice: it deletes data, and it is
+        # what turns the owner lock off.
+        from actions import identity_tool
+        return identity_tool.confirmation(args)
+
     if is_plugin:
         low = name.lower()
         if any(word in low for word in _RISKY_PLUGIN_WORDS):
