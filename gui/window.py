@@ -83,6 +83,7 @@ from gui.overlays import (
 from gui.providers_panel import (
     ProvidersOverlay,
 )
+from gui.terminal import TerminalDock
 
 from PyQt6.QtWidgets import QGridLayout
 
@@ -115,6 +116,7 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
+    _terminal_sig   = pyqtSignal(str, str, str)  # built-in terminals: action, program, folder
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -344,11 +346,24 @@ class MainWindow(QMainWindow):
             self._video_sound_out = None
             self._video_sync = None
 
-        # Stack: 0 = animated HUD, 1 = live camera, 2 = video
+        # ── Built-in terminals ───────────────────────────────────────────
+        # A fourth page of the same stack: real terminals the user types
+        # into, for Claude Code and Gemini CLI. `_term_shown` is whether the
+        # user wants that page; `_term_count` is a plain number because the
+        # voice tool reads it from another thread.
+        self._term_shown = False
+        self._term_count = 0
+        self._term_dock = TerminalDock()
+        self._term_dock.count_changed.connect(self._on_term_count)
+        self._term_dock.hide_requested.connect(self._hide_terminals)
+        QApplication.instance().aboutToQuit.connect(self._term_dock.close_all)
+
+        # Stack: 0 = animated HUD, 1 = live camera, 2 = video, 3 = terminals
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
         self._hud_cam_stack.addWidget(self._video_cont)
+        self._hud_cam_stack.addWidget(self._term_dock)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setHandleWidth(10)
@@ -413,6 +428,7 @@ class MainWindow(QMainWindow):
         self._quiz_sig.connect(self._show_quiz)
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
+        self._terminal_sig.connect(self._on_terminal)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -452,7 +468,7 @@ class MainWindow(QMainWindow):
         if start:
             self._hud_cam_stack.setCurrentIndex(1)
         else:
-            self._hud_cam_stack.setCurrentIndex(0)
+            self._hud_cam_stack.setCurrentIndex(self._centre_home())
             self._cam_live_lbl.clear()
 
     def _on_cam_frame(self, data: bytes) -> None:
@@ -640,7 +656,7 @@ class MainWindow(QMainWindow):
         if self._video_item is not None:
             self._video_item.setVisible(True)
         self._video_mute_btn.setVisible(True)
-        self._hud_cam_stack.setCurrentIndex(0)
+        self._hud_cam_stack.setCurrentIndex(self._centre_home())
         self._sync_mic_for_video()      # gives the microphone back
 
     def _set_video_muted(self, muted: bool) -> None:
@@ -965,6 +981,49 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._log.append_log(f"ERR: Shortcut failed — {e}")
 
+    # --- Built-in terminals ---------------------------------------------------
+    def _centre_home(self) -> int:
+        """The page the centre goes back to when a video or the camera closes:
+        the terminals if the user had them up, otherwise the face."""
+        return 3 if self._term_shown else 0
+
+    def _show_terminals(self) -> None:
+        self._term_shown = True
+        self._term_btn.setChecked(True)
+        self._hud_cam_stack.setCurrentIndex(3)
+        self._term_dock.focus_terminal()
+
+    def _hide_terminals(self) -> None:
+        """Back to the face. The terminals keep running."""
+        self._term_shown = False
+        self._term_btn.setChecked(False)
+        if self._hud_cam_stack.currentIndex() == 3:
+            self._hud_cam_stack.setCurrentIndex(2 if self._video_on else 0)
+
+    def _toggle_terminals(self, checked: bool = False) -> None:
+        if self._term_shown and self._hud_cam_stack.currentIndex() == 3:
+            self._hide_terminals()
+        else:
+            self._show_terminals()
+
+    def _on_terminal(self, action: str, program: str, folder: str) -> None:
+        """A request from the voice tool, delivered on the Qt thread."""
+        if action == "hide":
+            self._hide_terminals()
+            return
+        self._show_terminals()
+        if action == "open" and not self._term_dock.open(program, folder or None):
+            self._log.append_log(
+                "SYS: Both terminals are in use. Close one to open another.")
+
+    def _on_term_count(self, count: int) -> None:
+        was, self._term_count = self._term_count, count
+        if was and not count and self._term_shown:
+            self._hide_terminals()      # the last one closed: give the face back
+
+    def terminal_count(self) -> int:
+        return self._term_count
+
     def _toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()
@@ -1091,6 +1150,11 @@ class MainWindow(QMainWindow):
         self._ctrl_btn.setToolTip("Controls — the everyday switches")
         self._ctrl_btn.clicked.connect(self._toggle_controls)
         lay.addWidget(self._ctrl_btn)
+        self._term_btn = IconButton("terminal", 32)
+        self._term_btn.setCheckable(True)
+        self._term_btn.setToolTip("Terminals — Claude Code, Gemini CLI or a shell, inside this window")
+        self._term_btn.clicked.connect(self._toggle_terminals)
+        lay.addWidget(self._term_btn)
         lay.addStretch()
 
         self._state_chip = StateChip()

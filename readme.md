@@ -132,6 +132,7 @@ Vision is using them. Details in [docs/VISION.md](docs/VISION.md#wayland).
 | Deep research | The `researcher` agent plans questions, reads sources in full, checks every quote against the saved page and writes a cited report. |
 | Agents as files | An agent is a Markdown file in `agents/` (`general.md`, `researcher.md`) listing its tools, time budget and instructions. Background agents get no tool that acts on your PC. |
 | Claude Code and Gemini CLI helpers | "Ask Claude to explain the code in ~/vision", "have Gemini compare these laptops". Runs on your own subscriptions in the background and announces the answer. Read-only by default; letting a helper write files in a folder asks first. Details in [docs/VISION.md](docs/VISION.md#helpers-claude-code-and-gemini-cli). |
+| Built-in terminals | "Open a Claude terminal", "open a Gemini terminal", or the terminal button at the top of the window. A real terminal opens inside Vision, where the face is, and you type in it: Claude Code, Gemini CLI or a plain shell, with your normal sign-ins. Two can be open side by side. Vision cannot type into them or read them. Details in [docs/VISION.md](docs/VISION.md#built-in-terminals). |
 | Coding agent | Builds a new project, or changes an existing folder you drop on the window, with progress on screen. Asks first, because it runs code and may install Python packages. |
 | Code helper | Writes, edits, explains or runs a single code file. |
 | Steam and Epic games | Lists installed games, updates or installs them, shows download status, and schedules updates for the night. |
@@ -208,7 +209,7 @@ vision/
 │                          #   (memory, undo, screen and camera, system status,
 │                          #   news watch, shutting Vision down)
 ├── ui.py                  # VisionUI, the object every tool gets as `player`
-├── gui/                   # The window: HUD, panels, drawers, reactor, theme
+├── gui/                   # The window: HUD, panels, drawers, reactor, theme, terminals
 ├── actions/               # Bundled tools, one file each, found automatically
 │   ├── open_app.py              # Open apps, on a chosen monitor
 │   ├── computer_control.py      # Type, click, close/kill apps, tile and move windows
@@ -223,6 +224,7 @@ vision/
 │   ├── routines.py              # Routines and quiet hours
 │   ├── background_tasks.py      # Background tasks and research
 │   ├── cli_helper.py            # Claude Code and Gemini CLI helpers
+│   ├── terminal.py              # Open the built-in terminals by voice
 │   ├── dev_agent.py             # Coding agent
 │   ├── code_helper.py           # Single-file code help
 │   ├── file_controller.py       # Files and folders
@@ -247,6 +249,7 @@ vision/
 │   ├── tasks/                   # Background task engine
 │   ├── routines/                # Routine engine
 │   ├── timers.py                # Timer engine
+│   ├── terminal_session.py      # Shell and screen behind the built-in terminals
 │   ├── undo.py, outcome.py, appidentity.py, paths.py, ...
 │   └── prompt.txt               # The assistant's instructions
 ├── providers/             # Optional engines: Whisper, local models, Piper
@@ -271,6 +274,7 @@ python -m core._wayland_tests             # Wayland screen, mouse, keyboard, win
 python -m actions._google_calendar_tests  # Google Calendar
 python -m actions._cli_helper_tests       # Claude Code and Gemini CLI helpers
 python -m actions._features_tests         # Timers, scenes, Spotify, chat reply
+python -m actions._terminal_tests         # Built-in terminals
 ```
 
 ---

@@ -276,6 +276,22 @@ class VisionUI:
         """Thread-safe: display content in the panel below the HUD."""
         self._win._content_sig.emit(title[:48], text[:4000])
 
+    def open_terminal(self, program: str = "shell", folder: str = "") -> None:
+        """Thread-safe: open one of the built-in terminals and show them."""
+        self._win._terminal_sig.emit("open", str(program or "shell"), str(folder or ""))
+
+    def show_terminals(self, show: bool = True) -> None:
+        """Thread-safe: bring the terminals page up, or go back to the face."""
+        self._win._terminal_sig.emit("show" if show else "hide", "", "")
+
+    def terminal_count(self) -> int:
+        """How many built-in terminals are open. Safe from any thread."""
+        return self._win.terminal_count()
+
+    def terminals_shown(self) -> bool:
+        """Whether the terminals page is the one on screen. Safe from any thread."""
+        return bool(self._win._term_shown)
+
     def show_code_job(self, job: dict) -> None:
         """Thread-safe: draw the coding agent's live progress in the panel."""
         self._win._codejob_sig.emit(dict(job))
