@@ -583,6 +583,13 @@ TOOL_DECLARATIONS = [
     },
 ]
 
+# request_reconnect reason for a routine reconnect after the server's GoAway.
+_RENEWAL = "connection renewal"
+# Seconds since the user was last heard before a GoAway reconnect counts the
+# moment as quiet. Comfortably longer than a pause between words.
+_GOAWAY_USER_GAP = 1.5
+
+
 class _ReconnectSignal(Exception):
     """Raised inside the session TaskGroup to force a clean, voluntary reconnect
     (e.g. the user picked a new voice — the voice is fixed at connect time, so
@@ -1333,11 +1340,58 @@ class VisionLive:
         self._reconnect_event.clear()
         keep   = self._reconnect_keep
         reason = getattr(self, "_reconnect_reason", "") or "settings"
-        self.ui.write_log(
-            f"SYS: Applying {reason} — reconnecting"
-            + ("..." if keep else " (starting a fresh conversation)...")
-        )
+        if reason == _RENEWAL:
+            # Routine, every ten minutes or so: the console says it, the
+            # activity log does not fill up with it.
+            self._quiet_reconnect = True
+            print("[VISION] 🔄 Renewing the live connection (GoAway).")
+        else:
+            self.ui.write_log(
+                f"SYS: Applying {reason} — reconnecting"
+                + ("..." if keep else " (starting a fresh conversation)...")
+            )
         raise _ReconnectSignal(keep_context=keep)
+
+    # ── GoAway: the connection's time is nearly up ──────────────────────────
+    def _on_go_away(self, go_away) -> None:
+        """The server will close this connection soon. Note the deadline;
+        _watch_goaway reconnects at the next quiet moment before it."""
+        if getattr(self, "_goaway_deadline", None) is not None:
+            return
+        left = live_keepalive.parse_time_left(getattr(go_away, "time_left", None))
+        self._goaway_deadline = time.monotonic() + left
+        print(f"[VISION] ⏳ GoAway: connection ends in {left:.0f}s — "
+              "reconnecting at the next pause.")
+
+    def _goaway_quiet(self) -> bool:
+        """Nothing would be cut off by reconnecting now: Vision is not talking,
+        no reply is arriving or queued, no tool is running, and the user has
+        not been heard (mic above room noise, or a transcript) for a moment —
+        so a sentence being spoken is not cut in half."""
+        with self._speaking_lock:
+            speaking = self._is_speaking
+        q = self.audio_in_queue
+        heard = max(getattr(self, "_mic_voice_at", 0.0),
+                    getattr(self, "_last_user_speech", 0.0))
+        return not (speaking or self._reply_open
+                    or getattr(self, "_tool_busy", False)
+                    or (q is not None and not q.empty())
+                    or time.monotonic() - heard < _GOAWAY_USER_GAP)
+
+    async def _watch_goaway(self) -> None:
+        """Session-scoped: after a GoAway, rebuild the session (keeping the
+        conversation) when it is quiet, or just before the server's deadline
+        if it never is. Before this, GoAway was ignored and every connection
+        ended in a 1008 'client failed to close the connection' error."""
+        while True:
+            await asyncio.sleep(0.25)
+            deadline = getattr(self, "_goaway_deadline", None)
+            if deadline is None:
+                continue
+            late = time.monotonic() >= deadline - live_keepalive.GOAWAY_MARGIN
+            if late or self._goaway_quiet():
+                self.request_reconnect(keep_context=True, reason=_RENEWAL)
+                return
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -2229,7 +2283,11 @@ class VisionLive:
                 # the user's actual voice while listening. Purely cosmetic — any
                 # failure here must never disturb the mic.
                 try:
-                    self.ui.set_audio_level(_pcm_level(indata))
+                    _lvl = _pcm_level(indata)
+                    if _lvl > 0.0:
+                        # Someone may be mid-sentence: a GoAway reconnect waits.
+                        self._mic_voice_at = time.monotonic()
+                    self.ui.set_audio_level(_lvl)
                 except Exception:
                     pass
 
@@ -2463,14 +2521,18 @@ class VisionLive:
     async def _answer_tool_call(self, tool_call) -> None:
         """Run every function the model asked for and send the results back."""
         fn_responses = []
-        for fc in tool_call.function_calls:
-            print(f"[VISION] 📞 {fc.name}")
-            fr = await self._execute_tool(fc)
-            fn_responses.append(fr)
-        await self.session.send_tool_response(
-            function_responses=fn_responses
-        )
-        await self._flush_pending_vision()
+        self._tool_busy = True      # a GoAway reconnect waits for this
+        try:
+            for fc in tool_call.function_calls:
+                print(f"[VISION] 📞 {fc.name}")
+                fr = await self._execute_tool(fc)
+                fn_responses.append(fr)
+            await self.session.send_tool_response(
+                function_responses=fn_responses
+            )
+            await self._flush_pending_vision()
+        finally:
+            self._tool_busy = False
 
     async def _receive_audio(self):
         print("[VISION] 👂 Recv started")
@@ -2486,6 +2548,8 @@ class VisionLive:
                     self._clear_stall()
 
                     self._note_resumption(response)
+                    if getattr(response, "go_away", None) is not None:
+                        self._on_go_away(response.go_away)
                     self._queue_reply_audio(response)
 
                     if response.server_content:
@@ -2502,12 +2566,15 @@ class VisionLive:
                     if response.tool_call:
                         await self._answer_tool_call(response.tool_call)
         except Exception as e:
-            if live_keepalive.is_inactivity_close(e):
-                # Not a crash: the server timed the session out. The run loop
-                # reconnects at once and keeps the conversation; the full
-                # traceback here only buried that one fact under two pages.
-                print("[VISION] Live session closed by the server for "
-                      "inactivity — reconnecting.")
+            if live_keepalive.is_expected_close(e):
+                # Not a crash: the server timed the session out (inactivity,
+                # or the connection's time limit). The run loop reconnects at
+                # once and keeps the conversation; the full traceback here
+                # only buried that one fact under two pages.
+                why = ("its time limit" if live_keepalive.is_goaway_close(e)
+                       else "inactivity")
+                print(f"[VISION] Live session closed by the server ({why}) "
+                      "— reconnecting.")
             else:
                 print(f"[VISION] ❌ Recv: {e}")
                 traceback.print_exc()
@@ -3194,9 +3261,13 @@ class VisionLive:
         self._vision_last_time     = 0.0
         self._interrupted          = False
         self._reply_open           = False
+        self._goaway_deadline      = None
+        self._tool_busy            = False
+        quiet = getattr(self, "_quiet_reconnect", False)
+        self._quiet_reconnect      = False
 
         print("[VISION] Connected.")
-        if resumed_with:
+        if resumed_with and not quiet:
             # Say it plainly: the difference between "it reconnected"
             # and "it reconnected and still knows what we were doing"
             # is the whole point, and it is invisible otherwise.
@@ -3228,11 +3299,13 @@ class VisionLive:
         if self._wake_enabled and wake_ok and (first_connect or not self._awake):
             self._awake = False
             self.ui.set_state("SLEEPING")
-            self.ui.write_log(f"SYS: VISION online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
+            if not quiet:
+                self.ui.write_log(f"SYS: VISION online — sleeping. Say '{WAKE_PHRASE}' to wake me.")
         else:
             self._awake = True
             self.ui.set_state("LISTENING")
-            self.ui.write_log("SYS: VISION online.")
+            if not quiet:
+                self.ui.write_log("SYS: VISION online.")
 
         # What this machine will not permit, said once, on screen.
         #
@@ -3258,6 +3331,7 @@ class VisionLive:
         self._reconnect_event.clear()  # ignore requests from before this session
         tg.create_task(self._watch_reconnect())
         tg.create_task(self._watch_stall())
+        tg.create_task(self._watch_goaway())
         tg.create_task(self._send_realtime())
         tg.create_task(self._listen_audio())
         tg.create_task(self._receive_audio())
@@ -3314,12 +3388,13 @@ class VisionLive:
             self._conn_backoff = 0
             return True
 
-        # The server timed the session out for client inactivity (1008).
-        # Nothing is broken: reconnect at once, keeping the resumption handle
-        # so the conversation carries on, and skip the traceback. If the
-        # handle turns out to be stale, the branch below drops it next time.
-        if live_keepalive.is_inactivity_close(e):
-            print("[VISION] Reconnecting after the inactivity timeout.")
+        # The server timed the session out (1008): client inactivity, or the
+        # connection's time limit passed after a GoAway. Nothing is broken:
+        # reconnect at once, keeping the resumption handle so the
+        # conversation carries on, and skip the traceback. If the handle
+        # turns out to be stale, the branch below drops it next time.
+        if live_keepalive.is_expected_close(e):
+            print("[VISION] Reconnecting after the server closed the session.")
             self._conn_backoff = 0
             return True
 
