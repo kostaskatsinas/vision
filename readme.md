@@ -287,7 +287,7 @@ python -m core._barge_in_tests            # Interrupting Vision by talking over 
 python -m core._sleep_face_tests          # The face shuts its eyes and holds still asleep
 python -m core._window_control_tests      # Minimise / maximise the named app only
 python -m core._identity_tests            # Face and voice, and the owner lock
-python -m core._keepalive_tests           # Keeping the Gemini session open while quiet
+python -m core._keepalive_tests           # Keeping the Gemini session open (quiet, GoAway)
 ```
 
 ---
