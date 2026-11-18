@@ -283,6 +283,8 @@ def make_goaway() -> main.VisionLive:
     v._tool_busy = False
     v._goaway_deadline = None
     v.audio_in_queue = None
+    v._mic_voice_at = 0.0
+    v._last_user_speech = 0.0
     v.reconnects = []
     v.request_reconnect = lambda keep_context=True, reason="": v.reconnects.append(
         (keep_context, reason, main.time.monotonic()))
@@ -338,21 +340,47 @@ def test_goaway():
           v.reconnects and v.reconnects[0][:2] == (True, main._RENEWAL))
 
     # Busy (tool running, Vision talking): wait, but not past the deadline.
-    for busy in ("tool", "speaking", "reply"):
+    for busy in ("tool", "speaking", "reply", "user talking", "user transcript"):
         v = make_goaway()
         if busy == "tool":
             v._tool_busy = True
         elif busy == "speaking":
             v._is_speaking = True
-        else:
+        elif busy == "reply":
             v._reply_open = True
+        else:
+            # The user keeps talking: the stamp stays fresh the whole time.
+            attr = "_mic_voice_at" if busy == "user talking" else "_last_user_speech"
+            v._fresh = attr
         with contextlib.redirect_stdout(io.StringIO()):
             v._on_go_away(GoAwayMsg(f"{live_keepalive.GOAWAY_MARGIN + 1.0}s").go_away)
         t0 = main.time.monotonic()
-        asyncio.run(run_watch(v, 3.0))
+
+        async def watch_while_talking(v=v):
+            async def talk():
+                while True:
+                    setattr(v, v._fresh, main.time.monotonic())
+                    await asyncio.sleep(0.1)
+            t = asyncio.create_task(talk()) if getattr(v, "_fresh", None) else None
+            await run_watch(v, 3.0)
+            if t:
+                t.cancel()
+
+        asyncio.run(watch_while_talking())
         took = v.reconnects[0][2] - t0 if v.reconnects else -1
         check(f"goaway: busy ({busy}) waits, then goes before the deadline",
               len(v.reconnects) == 1 and 0.6 < took < 1.6, f"{took:.2f}")
+
+    # The user stopped talking a moment ago: wait the gap, then go.
+    v = make_goaway()
+    v._mic_voice_at = main.time.monotonic()
+    with contextlib.redirect_stdout(io.StringIO()):
+        v._on_go_away(GoAwayMsg("50s").go_away)
+    t0 = main.time.monotonic()
+    asyncio.run(run_watch(v, 3.0))
+    took = v.reconnects[0][2] - t0 if v.reconnects else -1
+    check("goaway: waits for the user's pause, then renews",
+          main._GOAWAY_USER_GAP - 0.1 < took < main._GOAWAY_USER_GAP + 0.6, f"{took:.2f}")
 
     # A second GoAway does not push the deadline back.
     v = make_goaway()

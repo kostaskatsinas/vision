@@ -585,6 +585,9 @@ TOOL_DECLARATIONS = [
 
 # request_reconnect reason for a routine reconnect after the server's GoAway.
 _RENEWAL = "connection renewal"
+# Seconds since the user was last heard before a GoAway reconnect counts the
+# moment as quiet. Comfortably longer than a pause between words.
+_GOAWAY_USER_GAP = 1.5
 
 
 class _ReconnectSignal(Exception):
@@ -1362,13 +1365,18 @@ class VisionLive:
 
     def _goaway_quiet(self) -> bool:
         """Nothing would be cut off by reconnecting now: Vision is not talking,
-        no reply is arriving or queued, and no tool is running."""
+        no reply is arriving or queued, no tool is running, and the user has
+        not been heard (mic above room noise, or a transcript) for a moment —
+        so a sentence being spoken is not cut in half."""
         with self._speaking_lock:
             speaking = self._is_speaking
         q = self.audio_in_queue
+        heard = max(getattr(self, "_mic_voice_at", 0.0),
+                    getattr(self, "_last_user_speech", 0.0))
         return not (speaking or self._reply_open
                     or getattr(self, "_tool_busy", False)
-                    or (q is not None and not q.empty()))
+                    or (q is not None and not q.empty())
+                    or time.monotonic() - heard < _GOAWAY_USER_GAP)
 
     async def _watch_goaway(self) -> None:
         """Session-scoped: after a GoAway, rebuild the session (keeping the
@@ -2275,7 +2283,11 @@ class VisionLive:
                 # the user's actual voice while listening. Purely cosmetic — any
                 # failure here must never disturb the mic.
                 try:
-                    self.ui.set_audio_level(_pcm_level(indata))
+                    _lvl = _pcm_level(indata)
+                    if _lvl > 0.0:
+                        # Someone may be mid-sentence: a GoAway reconnect waits.
+                        self._mic_voice_at = time.monotonic()
+                    self.ui.set_audio_level(_lvl)
                 except Exception:
                     pass
 
