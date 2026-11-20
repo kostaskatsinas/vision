@@ -389,8 +389,11 @@ class MainWindow(QMainWindow):
         self._center_split.setCollapsible(1, False)
         body.addWidget(self._center_split, stretch=5)
 
-        self._right_panel = self._build_right_panel()
-        body.addWidget(self._right_panel, stretch=0)
+        # The conversation and the command box sit in the left column, under
+        # STATUS and TASKS, so the face and the terminals get the whole right.
+        comm, cmd = self._build_comm_panels()
+        self._left_lay.addWidget(comm, stretch=3)
+        self._left_lay.addWidget(cmd)
 
         root.addLayout(body, stretch=1)
         root.addWidget(self._build_footer())
@@ -468,7 +471,7 @@ class MainWindow(QMainWindow):
         pw = _CameraPreview._W
         ph = self._cam_preview.height()
         self._cam_preview.setGeometry(
-            cw.width() - self._right_panel.width() - pw - 22,
+            cw.width() - pw - 22,
             cw.height() - ph - 28,
             pw, ph,
         )
@@ -1097,7 +1100,7 @@ class MainWindow(QMainWindow):
         pw = _CameraPreview._W
         ph = self._cam_preview.height() or _CameraPreview._H
         self._cam_preview.setGeometry(
-            cw.width() - self._right_panel.width() - pw - 22,
+            cw.width() - pw - 22,
             cw.height() - ph - 28,
             pw, ph,
         )
@@ -1241,15 +1244,15 @@ class MainWindow(QMainWindow):
         """Side columns grow with the window, within limits, so the centre keeps
         the space a larger window was opened for."""
         W = self.width()
+        # One side column now: it holds the log and the command box as well
+        # as the gauges, so it takes the width the right column used to have.
         if hasattr(self, "_left_panel"):
-            self._left_panel.setFixedWidth(max(190, min(250, int(W * 0.19))))
-        if hasattr(self, "_right_panel"):
-            self._right_panel.setFixedWidth(max(290, min(400, int(W * 0.27))))
+            self._left_panel.setFixedWidth(max(290, min(400, int(W * 0.27))))
         # The network graph is the first thing to give up its space: below this
-        # height the gauges and the task list need it more, and the rate itself
-        # is still in STATUS.
+        # height the task list and the conversation under it need it more, and
+        # the rate itself is still in STATUS.
         if hasattr(self, "_net_panel"):
-            self._net_panel.setVisible(self.height() >= 820)
+            self._net_panel.setVisible(self.height() >= 1150)
 
     def _refresh_identity_rows(self) -> None:
         """Engine and voice, read from config — on start and whenever they change."""
@@ -1279,10 +1282,11 @@ class MainWindow(QMainWindow):
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
         w.setStyleSheet("background: transparent;")
-        w.setFixedWidth(200)
+        w.setFixedWidth(300)
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
+        self._left_lay = lay
 
         sysp = HoloPanel("SYSTEMS", "LIVE")
         grid_w = QWidget()
@@ -1531,18 +1535,12 @@ class MainWindow(QMainWindow):
             body = head + "\n\n" + "\n".join(lines)
         self._show_content("BACKGROUND TASK", body[:4000])
 
-    def _build_right_panel(self) -> QWidget:
-        w = QWidget()
-        w.setStyleSheet("background: transparent;")
-        w.setFixedWidth(300)
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
-
+    def _build_comm_panels(self) -> tuple[QWidget, QWidget]:
+        """COMMUNICATIONS (the log) and COMMAND (file drop, typing, mic and
+        interrupt). They go in the left column under TASKS."""
         comm = HoloPanel("COMMUNICATIONS", "LOG")
         self._log = LogWidget()
         comm.body.addWidget(self._log)
-        lay.addWidget(comm, stretch=1)
 
         cmd = HoloPanel("COMMAND", "INPUT")
         self._drop_zone = FileDropZone()
@@ -1569,8 +1567,7 @@ class MainWindow(QMainWindow):
         self._interrupt_btn.clicked.connect(self._do_interrupt)
         row.addWidget(self._interrupt_btn, 1)
         cmd.body.addLayout(row)
-        lay.addWidget(cmd)
-        return w
+        return comm, cmd
 
     def _build_quick_drawer(self) -> QWidget:
         """Floating panel under the gear: the things you set once."""
