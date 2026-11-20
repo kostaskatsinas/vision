@@ -1253,6 +1253,15 @@ class MainWindow(QMainWindow):
         # the rate itself is still in STATUS.
         if hasattr(self, "_net_panel"):
             self._net_panel.setVisible(self.height() >= 1150)
+        # On a short window the gauges go next, so COMMAND at the bottom of the
+        # column keeps its typing box and buttons. They come back when the
+        # window grows.
+        if hasattr(self, "_sys_panel"):
+            self._sys_panel.setVisible(self.height() >= 900)
+        # Near the smallest window STATUS goes too: what it shows is
+        # information, while TASKS and COMMAND are things you use.
+        if hasattr(self, "_status_panel"):
+            self._status_panel.setVisible(self.height() >= 700)
 
     def _refresh_identity_rows(self) -> None:
         """Engine and voice, read from config — on start and whenever they change."""
@@ -1302,6 +1311,7 @@ class MainWindow(QMainWindow):
             grid.addWidget(g, i // 2, i % 2)
         sysp.body.addWidget(grid_w)
         lay.addWidget(sysp)
+        self._sys_panel = sysp
 
         self._net_panel = HoloPanel("NETWORK", "--")
         self._net_spark = Sparkline(samples=60, floor=0.25)
@@ -1320,6 +1330,7 @@ class MainWindow(QMainWindow):
                     self._row_engine, self._row_voice):
             stp.body.addWidget(row)
         lay.addWidget(stp)
+        self._status_panel = stp
 
         # Background tasks (core/tasks). Read from the engine every two seconds —
         # an in-memory list, no disk — and hidden rows cost nothing to paint.
