@@ -374,6 +374,7 @@ job Vision starts and reports on, a terminal is one you type in.
 |---|---|
 | Click the terminal button at the top (next to the gear and the sliders) | The terminals open in a panel under the face, like the weather and news panel, so the face stays on screen. Click again, or the ✕ at the top right of the panel, to hide them; the terminals keep running. Drag the gap above the panel to make it taller or shorter. |
 | ＋ CLAUDE, ＋ GEMINI, ＋ SHELL | Opens a terminal with that program. Two fit, side by side; drag the gap between them to resize. |
+| ＋ LOG | Opens a terminal showing what Vision prints in the terminal you started it from (`[VISION] Connected.`, `[Actions] …`), updating live. It reads `~/.local/state/vision/vision.log`; the previous run is in `vision.log.1`. Ctrl+C stops following and leaves a shell. Lines that Qt itself prints are not in it. |
 | "Open a Claude terminal" / "open a Gemini terminal" / "open a terminal in ~/vision" | The same, by voice. |
 | "Hide the terminals" / "show the terminals" | Shows or hides the terminal panel under the face. |
 | ✕ on a terminal, or `exit` in its shell | Closes that terminal and stops what runs in it. |

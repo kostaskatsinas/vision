@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -111,6 +112,49 @@ def test_environment() -> None:
 
     check("folder default", resolve_folder(None) == resolve_folder("") == resolve_folder("/no/such/dir"))
     check("folder given", str(resolve_folder("/tmp")) == os.path.realpath("/tmp"))
+
+
+def test_console_log() -> None:
+    import io, subprocess, tempfile
+    from core import console_log as cl
+    with tempfile.TemporaryDirectory() as d:
+        old_env, old_out, old_err = os.environ.get("XDG_STATE_HOME"), sys.stdout, sys.stderr
+        os.environ["XDG_STATE_HOME"] = d
+        real_out, real_err = io.StringIO(), io.StringIO()
+        sys.stdout, sys.stderr = real_out, real_err
+        cl._installed = None
+        try:
+            path = cl.log_path()
+            path.parent.mkdir(parents=True)
+            path.write_text("old run\n")
+            got = cl.install()
+            print("[VISION] Connected.")
+            print("Ελληνικά", file=sys.stderr)
+            check("install is idempotent", cl.install() == got == path)
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+            cl._installed = None
+            if old_env is None:
+                os.environ.pop("XDG_STATE_HOME", None)
+            else:
+                os.environ["XDG_STATE_HOME"] = old_env
+        check("console still gets it", real_out.getvalue() == "[VISION] Connected.\n", real_out.getvalue())
+        text = path.read_text(encoding="utf-8")
+        check("file gets stdout and stderr", text == "[VISION] Connected.\nΕλληνικά\n", repr(text))
+        check("previous run kept", path.with_name("vision.log.1").read_text() == "old run\n")
+        c = shell_command("log", "/bin/bash")
+        check("log program tails the file",
+              c[:3] == ["/bin/bash", "-i", "-c"] and c[3].startswith("tail -n 1000 -F ")
+              and c[3].endswith("; exec /bin/bash -i"), str(c))
+
+        sink = cl._Sink(Path(d) / "cap.log")
+        real_max, cl.MAX_BYTES = cl.MAX_BYTES, 100
+        try:
+            for _ in range(20):
+                sink.write("x" * 20 + "\n")
+        finally:
+            cl.MAX_BYTES = real_max
+        check("file is cut back", (Path(d) / "cap.log").stat().st_size <= 200)
 
 
 def test_pty() -> None:
@@ -372,7 +416,7 @@ def test_widget() -> None:
 
 
 def main() -> int:
-    for t in (test_screen, test_environment, test_pty, test_tool, test_widget):
+    for t in (test_screen, test_environment, test_console_log, test_pty, test_tool, test_widget):
         try:
             t()
         except Exception as e:

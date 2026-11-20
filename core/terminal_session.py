@@ -46,6 +46,9 @@ PROGRAMS = {
     "claude": {"name": "Claude Code", "command": "claude"},
     "gemini": {"name": "Gemini CLI", "command": "gemini"},
     "shell": {"name": "Shell", "command": ""},
+    # Vision's own console output, as printed in the terminal it was started
+    # from. core/console_log.py writes the file; Ctrl+C leaves a plain shell.
+    "log": {"name": "Vision log", "command": ""},
 }
 
 
@@ -83,6 +86,9 @@ def shell_command(program: str, shell: Optional[str] = None) -> list[str]:
     """The command line for a terminal that starts with `program`."""
     shell = shell or user_shell()
     command = PROGRAMS[program]["command"]
+    if program == "log":
+        from core.console_log import log_path
+        command = f"tail -n 1000 -F {shlex.quote(str(log_path()))}"
     if not command:
         return [shell, "-i"]
     # An interactive shell so ~/.bashrc (nvm, aliases, PATH) is read, then the
