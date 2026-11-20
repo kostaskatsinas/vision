@@ -378,6 +378,30 @@ async def test_idle_setting() -> None:
           == ["OFF", "30 MIN", "1 HOUR", "2 HOURS"])
 
 
+async def test_muted_mic_does_not_wake() -> None:
+    """Kostas, 2026-11-20: with the mic muted it still woke on "Vision"."""
+    det = FakeDetector()
+    v = make(True, det)
+    det.ready = True
+    v._awake = False
+    v.ui.muted = True
+    for _ in range(5):
+        check("muted block stays out of the model", v._wake_gate(b"x"))
+    check("muted mic feeds the wake word nothing", det.fed == 0, str(det.fed))
+    check("detector forgets what it heard at the mute", det.resets == 1, str(det.resets))
+    v._on_wake_detected()
+    check("a wake heard as the mute was pressed is ignored", not v._awake)
+    v.ui.muted = False
+    check("unmuted block goes to the detector", v._wake_gate(b"x") and det.fed == 1,
+          str(det.fed))
+    check("detector starts fresh on unmute", det.resets == 2, str(det.resets))
+    v._wake_gate(b"x")
+    check("no reset on every block", det.resets == 2, str(det.resets))
+    v._on_wake_detected()
+    check("unmuted wake word wakes it", v._awake)
+    check("awake blocks pass the gate", not v._wake_gate(b"x"))
+
+
 async def amain() -> int:
     saved = (main.save_wake_word_enabled, main.wake_is_ready, main.get_idle_sleep_minutes)
     try:
@@ -386,7 +410,8 @@ async def amain() -> int:
                   test_not_set_up, test_detector_fails, test_enable_while_one_sleep,
                   test_idle_sleeps_after_an_hour, test_idle_other_lengths,
                   test_idle_what_counts, test_idle_not_set_up,
-                  test_wake_word_on_keeps_two_minutes, test_idle_setting):
+                  test_wake_word_on_keeps_two_minutes, test_idle_setting,
+                  test_muted_mic_does_not_wake):
             await t()
     finally:
         (main.save_wake_word_enabled, main.wake_is_ready,
