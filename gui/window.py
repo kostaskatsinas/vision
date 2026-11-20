@@ -347,27 +347,28 @@ class MainWindow(QMainWindow):
             self._video_sync = None
 
         # ── Built-in terminals ───────────────────────────────────────────
-        # A fourth page of the same stack: real terminals the user types
-        # into, for Claude Code and Gemini CLI. `_term_shown` is whether the
-        # user wants that page; `_term_count` is a plain number because the
-        # voice tool reads it from another thread.
+        # Real terminals the user types into, for Claude Code and Gemini CLI.
+        # They sit in a panel under the face, like the weather and news panel,
+        # so the face stays on screen. `_term_shown` is whether the user wants
+        # that panel; `_term_count` is a plain number because the voice tool
+        # reads it from another thread.
         self._term_shown = False
         self._term_count = 0
         self._term_running = 0
-        self._term_dock = TerminalDock()
+        self._term_dock = TerminalDock(header=False)
         self._term_dock.count_changed.connect(self._on_term_count)
         self._term_dock.running_changed.connect(self._on_term_running)
         self._term_dock.start_failed.connect(
             lambda why: self._log.append_log(f"SYS: The terminal could not start. {why}"))
         self._term_dock.hide_requested.connect(self._hide_terminals)
         QApplication.instance().aboutToQuit.connect(self._term_dock.close_all)
+        self._term_panel = self._build_terminal_panel()
 
-        # Stack: 0 = animated HUD, 1 = live camera, 2 = video, 3 = terminals
+        # Stack: 0 = animated HUD, 1 = live camera, 2 = video
         self._hud_cam_stack = QStackedWidget()
         self._hud_cam_stack.addWidget(self.hud)
         self._hud_cam_stack.addWidget(_cam_cont)
         self._hud_cam_stack.addWidget(self._video_cont)
-        self._hud_cam_stack.addWidget(self._term_dock)
 
         self._center_split = QSplitter(Qt.Orientation.Vertical)
         self._center_split.setHandleWidth(10)
@@ -376,11 +377,16 @@ class MainWindow(QMainWindow):
             QSplitter::handle:hover {{ background: {C.PRI_GHO}; }}
         """)
         self._center_split.addWidget(self._hud_cam_stack)
+        self._center_split.addWidget(self._term_panel)
         self._center_split.addWidget(self._content_panel)
         self._center_split.addWidget(self._quiz_panel)
         self._center_split.setStretchFactor(0, 3)
-        self._center_split.setStretchFactor(1, 1)
+        self._center_split.setStretchFactor(1, 2)
+        self._center_split.setStretchFactor(2, 1)
         self._center_split.setCollapsible(0, False)
+        # Dragging the gap must not squash the terminals to nothing while
+        # they still count as shown; the cross hides them.
+        self._center_split.setCollapsible(1, False)
         body.addWidget(self._center_split, stretch=5)
 
         self._right_panel = self._build_right_panel()
@@ -472,7 +478,7 @@ class MainWindow(QMainWindow):
         if start:
             self._hud_cam_stack.setCurrentIndex(1)
         else:
-            self._hud_cam_stack.setCurrentIndex(self._centre_home())
+            self._hud_cam_stack.setCurrentIndex(0)
             self._cam_live_lbl.clear()
 
     def _on_cam_frame(self, data: bytes) -> None:
@@ -660,7 +666,7 @@ class MainWindow(QMainWindow):
         if self._video_item is not None:
             self._video_item.setVisible(True)
         self._video_mute_btn.setVisible(True)
-        self._hud_cam_stack.setCurrentIndex(self._centre_home())
+        self._hud_cam_stack.setCurrentIndex(0)
         self._sync_mic_for_video()      # gives the microphone back
 
     def _set_video_muted(self, muted: bool) -> None:
@@ -986,30 +992,47 @@ class MainWindow(QMainWindow):
             self._log.append_log(f"ERR: Shortcut failed — {e}")
 
     # --- Built-in terminals ---------------------------------------------------
-    def _centre_home(self) -> int:
-        """The page the centre goes back to when a video or the camera closes:
-        the terminals if the user had them up, otherwise the face."""
-        return 3 if self._term_shown else 0
+    def _build_terminal_panel(self) -> QWidget:
+        """The panel under the face that holds the terminals. Its header has
+        the open buttons and a cross that hides it; the terminals keep running."""
+        w = HoloPanel("TERMINALS", "")
+        w.setObjectName("TerminalPanel")
+        w.setMinimumHeight(160)
+        w.hide()
+        for b in self._term_dock.open_buttons:
+            b.adjustSize()
+            w.add_header_widget(b)
+        close = IconButton("close", 22)
+        close.setToolTip("Hide the terminals. They keep running.")
+        close.clicked.connect(self._hide_terminals)
+        w.add_header_widget(close)
+        w.body.addWidget(self._term_dock, stretch=1)
+        return w
+
+    def _terminals_visible(self) -> bool:
+        if not self._term_panel.isVisible():
+            return False
+        idx = self._center_split.indexOf(self._term_panel)
+        return self._center_split.sizes()[idx] >= 60
 
     def _show_terminals(self) -> None:
         self._term_shown = True
         self._term_btn.setChecked(True)
-        if self._hud_cam_stack.currentIndex() == 1:
-            # The live camera would otherwise keep running behind the
-            # terminals, with its CLOSE button out of reach.
-            self.stop_camera_stream()
-        self._hud_cam_stack.setCurrentIndex(3)
+        if not self._terminals_visible():
+            self.hud.glance(0.0, -0.85, hold=1.3)
+        # About half the column, so a terminal has room and the face stays.
+        total = sum(self._center_split.sizes()) or self._center_split.height()
+        self._reveal_below_hud(self._term_panel, max(260, int(total * 0.48)))
         self._term_dock.focus_terminal()
 
     def _hide_terminals(self) -> None:
-        """Back to the face. The terminals keep running."""
+        """Hide the terminal panel. The terminals keep running."""
         self._term_shown = False
         self._term_btn.setChecked(False)
-        if self._hud_cam_stack.currentIndex() == 3:
-            self._hud_cam_stack.setCurrentIndex(2 if self._video_on else 0)
+        self._term_panel.hide()
 
     def _toggle_terminals(self, checked: bool = False) -> None:
-        if self._term_shown and self._hud_cam_stack.currentIndex() == 3:
+        if self._term_shown and self._terminals_visible():
             self._hide_terminals()
         else:
             self._show_terminals()
@@ -1776,13 +1799,20 @@ class MainWindow(QMainWindow):
         w.body.addWidget(self._content_display)
         return w
 
+    # The face keeps at least this much of the column when a panel opens.
+    _HUD_MIN = 220
+
     def _reveal_below_hud(self, panel: QWidget, want: int) -> None:
         """Show a panel under the HUD at a usable height.
 
         Checked every time, not only the first: showing the quiz gives the
         content panel a height of 0 while leaving it "visible", so the next
         search result, review or finished task landed in a panel nobody could
-        see."""
+        see.
+
+        The room comes from the face first, down to _HUD_MIN, so a weather
+        panel and the terminals can be open together. Only when the face has
+        nothing more to give do the other panels shrink."""
         panel.show()
         split = self._center_split
         idx = split.indexOf(panel)
@@ -1790,9 +1820,25 @@ class MainWindow(QMainWindow):
         if idx < 0 or sizes[idx] >= 60:
             return
         total = sum(sizes) or split.height()
-        new = [0] * len(sizes)
-        new[0] = max(total - want, 120)
+        if not any(sizes):
+            sizes = [0] * len(sizes)
+            sizes[0] = total
+        new = list(sizes)
+        need = want - new[idx]
         new[idx] = want
+        take = min(need, max(new[0] - self._HUD_MIN, 0))
+        new[0] -= take
+        need -= take
+        # Then from the other panels, the biggest first.
+        for j in sorted((j for j in range(1, len(new)) if j != idx),
+                        key=lambda j: -new[j]):
+            if need <= 0:
+                break
+            take = min(need, new[j])
+            new[j] -= take
+            need -= take
+        if need > 0:
+            new[0] = max(new[0] - need, 120)
         split.setSizes(new)
 
     def _show_content(self, title: str, text: str):

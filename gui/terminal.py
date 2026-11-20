@@ -699,39 +699,44 @@ class TerminalPane(QWidget):
 
 
 class TerminalDock(QWidget):
-    """The page that takes the centre of the window: up to two terminals side
-    by side, and the buttons that open them."""
+    """Up to two terminals side by side, and the buttons that open them.
+
+    The window shows it in a panel under the face, whose header carries the
+    open buttons (`open_buttons`) and the close cross; `header=False` leaves
+    them for that header instead of putting a row of its own on top."""
 
     count_changed = pyqtSignal(int)     # how many terminals are open
     running_changed = pyqtSignal(int)   # how many of them have a shell that started
     start_failed = pyqtSignal(str)
     hide_requested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, header: bool = True):
         super().__init__(parent)
-        self.setStyleSheet(f"background: {C.BG};")
+        self.setStyleSheet("background: transparent;" if not header else f"background: {C.BG};")
         self._panes: list[TerminalPane] = []
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 6, 8, 8)
+        lay.setContentsMargins(*((8, 6, 8, 8) if header else (0, 0, 0, 0)))
         lay.setSpacing(4)
 
-        hdr = QHBoxLayout()
-        title = QLabel("▣  TERMINALS")
-        title.setFont(hud_font(9, QFont.Weight.Bold))
-        title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
-        hdr.addWidget(title)
-        hdr.addStretch()
         self._open_btns = []
         for program, label in (("claude", "＋ CLAUDE"), ("gemini", "＋ GEMINI"), ("shell", "＋ SHELL")):
             b = _link_btn(label, f"Open a terminal with {PROGRAMS[program]['name']}")
             b.clicked.connect(lambda _=False, prog=program: self.open(prog))
-            hdr.addWidget(b)
             self._open_btns.append(b)
-        hide = _link_btn("▾  HIDE", "Back to the face. The terminals keep running.")
-        hide.clicked.connect(self.hide_requested.emit)
-        hdr.addWidget(hide)
-        lay.addLayout(hdr)
+        if header:
+            hdr = QHBoxLayout()
+            title = QLabel("▣  TERMINALS")
+            title.setFont(hud_font(9, QFont.Weight.Bold))
+            title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+            hdr.addWidget(title)
+            hdr.addStretch()
+            for b in self._open_btns:
+                hdr.addWidget(b)
+            hide = _link_btn("▾  HIDE", "Hide the terminals. They keep running.")
+            hide.clicked.connect(self.hide_requested.emit)
+            hdr.addWidget(hide)
+            lay.addLayout(hdr)
 
         self._split = QSplitter(Qt.Orientation.Horizontal)
         self._split.setHandleWidth(8)
@@ -743,14 +748,17 @@ class TerminalDock(QWidget):
         lay.addWidget(self._split, stretch=1)
 
         self._hint = QLabel(
-            "No terminal is open.\n\n"
-            "Use the buttons above to open one with Claude Code, Gemini CLI\n"
-            "or a plain shell. Two can be open at the same time.")
+            "No terminal is open. Use ＋ CLAUDE, ＋ GEMINI or ＋ SHELL above\n"
+            "to open one. Two can be open at the same time.")
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setFont(hud_font(9))
         self._hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
         lay.addWidget(self._hint, stretch=1)
         self._sync()
+
+    @property
+    def open_buttons(self) -> list:
+        return list(self._open_btns)
 
     def count(self) -> int:
         return len(self._panes)

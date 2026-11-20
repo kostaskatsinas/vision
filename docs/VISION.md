@@ -372,10 +372,10 @@ job Vision starts and reports on, a terminal is one you type in.
 
 | Do | What happens |
 |---|---|
-| Click the terminal button at the top (next to the gear and the sliders) | The terminals take the place of the face. Click again, or HIDE, to get the face back; the terminals keep running. |
+| Click the terminal button at the top (next to the gear and the sliders) | The terminals open in a panel under the face, like the weather and news panel, so the face stays on screen. Click again, or the ✕ at the top right of the panel, to hide them; the terminals keep running. Drag the gap above the panel to make it taller or shorter. |
 | ＋ CLAUDE, ＋ GEMINI, ＋ SHELL | Opens a terminal with that program. Two fit, side by side; drag the gap between them to resize. |
 | "Open a Claude terminal" / "open a Gemini terminal" / "open a terminal in ~/vision" | The same, by voice. |
-| "Hide the terminals" / "show the terminals" | Switches between the terminals and the face. |
+| "Hide the terminals" / "show the terminals" | Shows or hides the terminal panel under the face. |
 | ✕ on a terminal, or `exit` in its shell | Closes that terminal and stops what runs in it. |
 
 How it works: each terminal is your own login shell, started interactively on

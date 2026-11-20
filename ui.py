@@ -281,7 +281,7 @@ class VisionUI:
         self._win._terminal_sig.emit("open", str(program or "shell"), str(folder or ""))
 
     def show_terminals(self, show: bool = True) -> None:
-        """Thread-safe: bring the terminals page up, or go back to the face."""
+        """Thread-safe: show the terminal panel under the face, or hide it."""
         self._win._terminal_sig.emit("show" if show else "hide", "", "")
 
     def terminal_count(self) -> int:
@@ -293,7 +293,7 @@ class VisionUI:
         return self._win.terminals_running()
 
     def terminals_shown(self) -> bool:
-        """Whether the terminals page is the one on screen. Safe from any thread."""
+        """Whether the terminal panel is shown. Safe from any thread."""
         return bool(self._win._term_shown)
 
     def show_code_job(self, job: dict) -> None:
