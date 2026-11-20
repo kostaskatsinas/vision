@@ -280,7 +280,9 @@ class WakeWordDetector:
     def reset(self) -> None:
         """Forget what was heard so far — call it when the assistant goes to sleep.
         Done on the detector's own thread, which is the only one that touches
-        the model."""
+        the model. Audio still waiting in the queue is dropped too, so it is
+        not heard after the reset."""
+        self._drain()
         self._reset_pending = True
 
     def _reset_model(self) -> None:

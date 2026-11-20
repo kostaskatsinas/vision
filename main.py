@@ -817,6 +817,8 @@ class VisionLive:
         # switched off. The wake word is turned on for that one sleep (never
         # saved) and goes back off the moment the assistant wakes.
         self._wake_for_one_sleep = False
+        # True while the mic is muted and asleep, so the detector is not fed.
+        self._wake_muted = False
 
         # Restore the saved push-to-talk preference. Doing it here rather than
         # in __init__ means the hotkey thread only exists once there is a
@@ -853,8 +855,34 @@ class VisionLive:
             return self._wake_detector.start()
         return True
 
+    def _wake_gate(self, indata) -> bool:
+        """Mic callback, first step. True while asleep: the block goes only to
+        the local wake word detector, never to the model. A muted microphone
+        is muted for the wake word too: it hears nothing until MIC ACTIVE
+        again, and what it heard just before the mute is thrown away, so it
+        cannot wake on that either."""
+        if not (self._wake_enabled and not self._awake):
+            return False
+        det = self._wake_detector
+        if det is None:
+            return True
+        if self.ui.muted:
+            if not getattr(self, "_wake_muted", False):
+                self._wake_muted = True
+                det.reset()
+            return True
+        if getattr(self, "_wake_muted", False):
+            self._wake_muted = False
+            det.reset()
+        det.feed(indata)
+        return True
+
     def _on_wake_detected(self) -> None:
         """Called from the detector thread when the wake phrase is heard."""
+        # A word heard in the instant the mute button was pressed must not wake
+        # it either: muted means the wake word is not listening.
+        if self.ui.muted:
+            return
         self.wake(reason="wake word")
 
     def _end_one_sleep(self) -> None:
@@ -2221,10 +2249,7 @@ class VisionLive:
             # detector, which runs its model in ITS OWN thread — the cost here is
             # only a queue push, so the audio path is never slowed. When wake word
             # is off (default) or we're awake, this is a single boolean check.
-            if self._wake_enabled and not self._awake:
-                det = self._wake_detector
-                if det is not None:
-                    det.feed(indata)
+            if self._wake_gate(indata):
                 return
             with self._speaking_lock:
                 vision_speaking = self._is_speaking
