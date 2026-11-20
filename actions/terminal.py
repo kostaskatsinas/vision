@@ -26,6 +26,7 @@ _ALIASES = {
     "claude": "claude", "claude code": "claude", "claude_code": "claude", "claudecode": "claude",
     "gemini": "gemini", "gemini cli": "gemini", "gemini_cli": "gemini",
     "shell": "shell", "bash": "shell", "terminal": "shell", "plain": "shell", "": "shell",
+    "log": "log", "vision log": "log", "logs": "log", "console": "log", "output": "log",
 }
 
 
@@ -63,7 +64,7 @@ def terminal(parameters: dict, player=None, session_memory=None) -> str:
 
         program = _program(p.get("program"))
         if program is None:
-            return outcome.failed("terminal", "program must be claude, gemini or shell")
+            return outcome.failed("terminal", "program must be claude, gemini, shell or log")
         before = player.terminal_count()
         running = player.terminals_running()
         if before >= MAX_TERMINALS:
@@ -100,7 +101,8 @@ TOOL = {
     "description": (
         "Open a real terminal INSIDE the Vision window for the user to type "
         "in. Use for 'open a Claude terminal', 'open Claude Code', 'open a "
-        "Gemini terminal', 'open a terminal here', 'show the terminals', "
+        "Gemini terminal', 'open a terminal here', 'show me your log' "
+        "(program log: Vision's own console output), 'show the terminals', "
         "'hide the terminals'. Two can be open at once, side by side. You "
         "cannot type into these terminals, read them or close them: the user "
         "does. To give Claude Code or Gemini CLI a job yourself and report "
@@ -117,7 +119,7 @@ TOOL = {
             },
             "program": {
                 "type": "STRING",
-                "description": "open: claude | gemini | shell (default shell)",
+                "description": "open: claude | gemini | shell | log (default shell)",
             },
             "folder": {
                 "type": "STRING",

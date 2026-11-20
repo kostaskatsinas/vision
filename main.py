@@ -18,6 +18,14 @@ for _stream in ("stdout", "stderr"):
     except Exception:
         pass          # pythonw / redirected pipes / anything exotic — never fatal
 
+# ── A copy of the console in ~/.local/state/vision/vision.log ───────────────
+# So the built-in terminals can show it (＋ LOG). core/console_log.py.
+try:
+    from core import console_log as _console_log
+    _console_log.install()
+except Exception as _e:
+    print(f"[log] not installed: {type(_e).__name__}")
+
 # ── HTTPS trusts the system's roots AND certifi's ────────────────────────────
 # A Windows store that never fetched a root failed every urllib call to that
 # site with an "SSL problem" (CERTIFICATE_VERIFY_FAILED). core/tls.py.

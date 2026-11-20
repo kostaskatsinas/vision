@@ -720,7 +720,8 @@ class TerminalDock(QWidget):
         lay.setSpacing(4)
 
         self._open_btns = []
-        for program, label in (("claude", "＋ CLAUDE"), ("gemini", "＋ GEMINI"), ("shell", "＋ SHELL")):
+        for program, label in (("claude", "＋ CLAUDE"), ("gemini", "＋ GEMINI"), ("shell", "＋ SHELL"),
+                               ("log", "＋ LOG")):
             b = _link_btn(label, f"Open a terminal with {PROGRAMS[program]['name']}")
             b.clicked.connect(lambda _=False, prog=program: self.open(prog))
             self._open_btns.append(b)
@@ -748,8 +749,8 @@ class TerminalDock(QWidget):
         lay.addWidget(self._split, stretch=1)
 
         self._hint = QLabel(
-            "No terminal is open. Use ＋ CLAUDE, ＋ GEMINI or ＋ SHELL above\n"
-            "to open one. Two can be open at the same time.")
+            "No terminal is open. Use ＋ CLAUDE, ＋ GEMINI or ＋ SHELL above to open\n"
+            "one, or ＋ LOG to see what Vision prints. Two can be open at the same time.")
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setFont(hud_font(9))
         self._hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
